@@ -3,6 +3,12 @@
 
 from datetime import datetime, timezone
 
+try:
+    from config import settings
+    _tz_app = getattr(settings, "GMT7", timezone.utc)
+except Exception:
+    _tz_app = timezone.utc
+
 # ---------- Real trade (giữ cho sau) ----------
 _balance = 0.0
 _position = None
@@ -20,6 +26,9 @@ _paper_status = "stopped"  # "stopped" | "running" | "paused"
 _paper_open_trade = None   # dict giống open_trade (entry_price, size, side, atr, ...)
 _paper_trades = []        # list các lệnh đã đóng
 _paper_last_trade = None   # lệnh gần nhất đóng
+# Quy tắc vốn (khóa từ web): None = dùng config
+_paper_leverage = None
+_paper_wallet_pct = None
 
 
 def set_balance(value: float):
@@ -74,7 +83,7 @@ def reset_trades_today():
 
 def set_bot_started_at(dt: datetime = None):
     global _bot_started_at
-    _bot_started_at = dt or datetime.now(timezone.utc)
+    _bot_started_at = dt or datetime.now(_tz_app)
 
 
 def get_bot_started_at():
@@ -161,13 +170,31 @@ def get_paper_last_trade():
     return _paper_last_trade
 
 
+def get_paper_leverage():
+    return _paper_leverage
+
+
+def set_paper_leverage(value: float or None):
+    global _paper_leverage
+    _paper_leverage = float(value) if value is not None else None
+
+
+def get_paper_wallet_pct():
+    return _paper_wallet_pct
+
+
+def set_paper_wallet_pct(value: float or None):
+    global _paper_wallet_pct
+    _paper_wallet_pct = float(value) if value is not None else None
+
+
 def paper_start(initial_capital: float):
     """Gọi khi bấm Kích hoạt: set vốn, ngày bắt đầu, status running, xóa lịch sử."""
     global _paper_initial_capital, _paper_balance, _paper_started_at, _paper_status
     global _paper_open_trade, _paper_trades, _paper_last_trade
     _paper_initial_capital = float(initial_capital)
     _paper_balance = float(initial_capital)
-    _paper_started_at = datetime.now(timezone.utc)
+    _paper_started_at = datetime.now(_tz_app)
     _paper_status = "running"
     _paper_open_trade = None
     _paper_trades = []
@@ -218,4 +245,6 @@ def to_status_dict():
         "paper_total_pnl": round(total_pnl, 2),
         "paper_long_count": long_ct,
         "paper_short_count": short_ct,
+        "paper_leverage": _paper_leverage,
+        "paper_wallet_pct": _paper_wallet_pct,
     }

@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Gửi tin nhắn Telegram: nội dung dựa trên paper trade (vốn ảo, lệnh ảo)."""
+"""
+Gửi tin nhắn Telegram: paper/live trade, lỗi.
+Quy tắc: mọi thay đổi trạng thái lệnh (mở/đóng) và sự cố (API, server) đều gửi thông báo.
+Dùng chung cho paper và sau này kết nối ví Binance thật.
+"""
 
 import requests
 from config import settings
@@ -130,3 +134,106 @@ def send_status_15m():
     Tin nhắn update trạng thái (định kỳ 15 phút). Cùng nội dung với lệnh /now.
     """
     send_message(get_status_update_text())
+
+
+def _format_dt(v):
+    """Chuẩn hóa thời gian hiển thị theo GMT+7."""
+    if v is None:
+        return "—"
+    try:
+        from datetime import datetime, timezone, timedelta
+        gmt7 = timezone(timedelta(hours=7))
+        if hasattr(v, "strftime"):
+            dt = v
+            if getattr(dt, "tzinfo", None) is not None and hasattr(dt, "astimezone"):
+                dt = dt.astimezone(gmt7)
+            elif getattr(dt, "tzinfo", None) is None:
+                dt = dt.replace(tzinfo=timezone.utc).astimezone(gmt7)
+            return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        pass
+    s = str(v)
+    if "T" in s:
+        try:
+            from datetime import datetime, timezone, timedelta
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            gmt7 = timezone(timedelta(hours=7))
+            if dt.tzinfo and hasattr(dt, "astimezone"):
+                dt = dt.astimezone(gmt7)
+            return dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+    return s[:16] if len(s) > 16 else s
+
+
+def notify_trade_closed(closed: dict, source: str = "loop") -> bool:
+    """
+    Gửi thông báo đóng lệnh (paper hoặc sau này live).
+    source: "loop" | "web" | "telegram"
+    closed: dict có profit, capital_before, capital_after, side, entry_price, exit_price, exit_reason, ...
+    """
+    if not closed:
+        return False
+    try:
+        side = str(closed.get("side", "")).upper()
+        profit = float(closed.get("profit", 0))
+        cap_before = float(closed.get("capital_before") or 0)
+        cap_after = float(closed.get("capital_after") or 0)
+        entry_px = closed.get("entry_price")
+        exit_px = closed.get("exit_price")
+        reason = closed.get("exit_reason") or "—"
+        pct_cap = round((profit / cap_before * 100), 2) if cap_before else 0
+        pct_sign = "+" if pct_cap >= 0 else ""
+        src_label = {"loop": "Tự động (Loop)", "web": "Web", "telegram": "Telegram"}.get(source, source)
+        ep = float(entry_px) if entry_px is not None else 0
+        xp = float(exit_px) if exit_px is not None else 0
+        lines = [
+            "[PAPER] 🔴 Đóng lệnh",
+            f"Nguồn: {src_label}",
+            f"Side: {side}",
+            f"Trạng thái: Đã đóng",
+            f"PnL: {profit:+.2f} USDT",
+            f"% vốn: {pct_sign}{pct_cap}%",
+            f"Vốn sau: {cap_after:.2f} USDT",
+            f"Vào: {_format_dt(closed.get('entry_time'))} @ {ep:.2f}",
+            f"Ra: {_format_dt(closed.get('exit_time'))} @ {xp:.2f}",
+            f"Lý do: {reason}",
+        ]
+        return send_message("\n".join(lines))
+    except Exception:
+        return False
+
+
+def notify_trade_opened(open_trade: dict, source: str = "loop") -> bool:
+    """
+    Gửi thông báo mở lệnh. source: "loop" | "web" | "telegram"
+    """
+    if not open_trade:
+        return False
+    try:
+        side = str(open_trade.get("side", "")).upper()
+        entry_px = float(open_trade.get("entry_price") or 0)
+        size = float(open_trade.get("size") or 0)
+        src_label = {"loop": "Tự động (Loop)", "web": "Web", "telegram": "Telegram"}.get(source, source)
+        lines = [
+            "[PAPER] 🟢 Mở lệnh",
+            f"Nguồn: {src_label}",
+            f"Side: {side} @ {entry_px:.2f}",
+            f"Size: {size:.4f}",
+        ]
+        return send_message("\n".join(lines))
+    except Exception:
+        return False
+
+
+def notify_error(message: str, context: str = "app") -> bool:
+    """
+    Gửi thông báo lỗi (API bị chặn, mất kết nối, server, ...).
+    context: "api" | "binance" | "server" | "app"
+    """
+    try:
+        ctx = {"api": "API", "binance": "Binance", "server": "Server", "app": "App"}.get(context, context)
+        text = f"⚠️ [{ctx}] {message}"
+        return send_message(text)
+    except Exception:
+        return False

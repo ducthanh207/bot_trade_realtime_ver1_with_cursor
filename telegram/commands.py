@@ -4,6 +4,8 @@
 import threading
 import requests
 from datetime import datetime, timezone
+from config import settings as _cfg
+_tz_app = getattr(_cfg, "GMT7", timezone.utc)
 from config import settings
 
 # Trạng thái chờ nhập % vốn (chat_id -> { "waiting": "pct", "side": "LONG"|"SHORT" })
@@ -77,6 +79,11 @@ def _format_status():
         try:
             from datetime import datetime
             dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            try:
+                if _tz_app != timezone.utc and hasattr(dt, "astimezone"):
+                    dt = dt.astimezone(_tz_app)
+            except Exception:
+                pass
             started = dt.strftime("%Y-%m-%d %H:%M") if hasattr(dt, "strftime") else started
         except Exception:
             pass
@@ -273,7 +280,8 @@ def _do_paper_entry(chat_id: str, side: str, pct: float) -> str:
             pass
         atr_now = float(row_4h["ATR"]) if row_4h is not None and "ATR" in row_4h else entry_px * 0.01
         wallet_pct = max(0.01, min(1.0, pct / 100.0))
-        size, margin, notional = size_and_margin(balance, entry_px, wallet_pct=wallet_pct)
+        lev = state.get_paper_leverage()
+        size, margin, notional = size_and_margin(balance, entry_px, leverage=lev, wallet_pct=wallet_pct)
         if size <= 0 or margin > balance:
             return "Không đủ margin hoặc size = 0."
         fee_in = size * entry_px * settings.TAKER_FEE
@@ -291,7 +299,7 @@ def _do_paper_entry(chat_id: str, side: str, pct: float) -> str:
         entry_wma_rsi = _f(row_4h.get("WMA_RSI")) if row_4h is not None else None
         state.set_paper_open_trade({
             "side": side,
-            "entry_time": datetime.now(timezone.utc),
+            "entry_time": datetime.now(_tz_app),
             "entry_price": entry_px,
             "size": size,
             "margin": margin,
@@ -365,10 +373,11 @@ def _do_paper_close(chat_id: str) -> str:
         exit_wma_rsi = _f(r.get("WMA_RSI"))
     closed = {
         "entry_time": open_trade.get("entry_time"),
-        "exit_time": datetime.now(timezone.utc),
+        "exit_time": datetime.now(_tz_app),
         "entry_price": entry,
         "exit_price": exit_px,
         "side": side,
+        "size": open_trade.get("size"),
         "profit": pnl_net,
         "capital_before": balance,
         "capital_after": capital_after,
@@ -387,6 +396,11 @@ def _do_paper_close(chat_id: str) -> str:
     try:
         from bot.paper_persistence import save_paper_state
         save_paper_state()
+    except Exception:
+        pass
+    try:
+        from telegram.notifier import notify_trade_closed
+        notify_trade_closed(closed, source="telegram")
     except Exception:
         pass
     return f"Đã đóng lệnh {side}. PnL: {pnl_net:+.2f} USDT | Vốn sau: {capital_after:.2f} USDT"

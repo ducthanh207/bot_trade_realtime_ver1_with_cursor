@@ -27,6 +27,12 @@
     .status-paused { background: #f2a900; color: #000; }
     .status-stopped { background: #636368; color: #fff; }
     .refresh-msg { font-size: 11px; color: #787b86; }
+    /* Hàng 2: quy tắc vốn (đòn bẩy, % vốn, nút cập nhật) */
+    .overview-rules { width: 100%; flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; margin-top: 6px; padding-top: 8px; border-top: 1px solid #2a2e39; }
+    .overview-rules label { font-weight: 600; color: #787b86; }
+    .overview-rules input[type="number"] { width: 80px; padding: 6px 8px; background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc; border-radius: 4px; }
+    .overview-rules button.btn-rules { padding: 6px 14px; background: #2962ff; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
+    .overview-rules button.btn-rules:hover { background: #1e53e5; }
     /* Mảng 2 + 3: Content – trái (list lệnh) và phải (chart) mỗi bên 50% chiều ngang */
     .content { flex: 1; display: flex; min-height: 0; }
     /* Trái: List lệnh – 50% chiều ngang, đủ chỗ hiển thị đủ cột */
@@ -48,7 +54,8 @@
     .orders-table th:nth-child(8), .orders-table td:nth-child(8) { min-width: 5em; }
     .orders-table th:nth-child(9), .orders-table td:nth-child(9) { min-width: 4em; }
     .orders-table th:nth-child(10), .orders-table td:nth-child(10) { min-width: 5em; }
-    .orders-table th:nth-child(11), .orders-table td:nth-child(11) { min-width: 4.5em; }
+    .orders-table th:nth-child(11), .orders-table td:nth-child(11) { min-width: 5em; }
+    .orders-table th:nth-child(12), .orders-table td:nth-child(12) { min-width: 4.5em; }
     .orders-table tr.pnl-positive { background: rgba(38, 166, 154, 0.15); }
     .orders-table tr.pnl-negative { background: rgba(239, 83, 80, 0.15); }
     .orders-table tr.pnl-positive:hover { background: rgba(38, 166, 154, 0.25); }
@@ -57,7 +64,7 @@
     .orders-table .pnl-neg { color: #ef5350; }
     .orders-table .btn-close-order { padding: 4px 8px; font-size: 11px; background: #ef5350; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
     .orders-table .btn-close-order:hover { background: #c62828; }
-    .orders-table th:nth-child(12), .orders-table td:nth-child(12) { min-width: 5.5em; }
+    .orders-table th:nth-child(13), .orders-table td:nth-child(13) { min-width: 5.5em; }
     /* Phải: Charts – 50% chiều ngang; trong đó chart giá (2/3) trên, RSI/WMA/EMA (1/3) dưới */
     .charts-panel { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
     .chart-price-wrap { flex: 0 0 66.666%; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid #2a2e39; }
@@ -96,6 +103,13 @@
       <span class="stat" id="statBalance">Vốn: 0.00</span>
       <span class="stat" id="statCapitalOpen">Capital_Open: 0.00</span>
       <span class="refresh-msg" id="refreshMsg">Cập nhật 5s</span>
+      <div class="overview-rules">
+        <label>Đòn bẩy</label>
+        <input type="number" id="inputLeverage" min="1" max="125" step="1" value="20" title="1–125">
+        <label>% vốn vào lệnh</label>
+        <input type="number" id="inputWalletPct" min="1" max="100" step="0.5" value="30" title="1–100%">
+        <button type="button" class="btn-rules" id="btnCapitalRules">Cập nhật quy tắc vốn</button>
+      </div>
     </header>
 
     <div class="content">
@@ -105,7 +119,7 @@
           <table class="orders-table">
             <thead>
               <tr>
-                <th>ID</th><th>Symbol</th><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>Profit</th><th>% PnL</th><th>Cap After</th><th>Reason</th><th>Thao tác</th>
+                <th>ID</th><th>Symbol</th><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>Profit</th><th>% PnL</th><th>%PnL vốn</th><th>Cap After</th><th>Reason</th><th>Thao tác</th>
               </tr>
             </thead>
             <tbody id="ordersBody"></tbody>
@@ -156,7 +170,9 @@
 
   function formatDate(x) {
     if (!x) return '—';
-    try { return new Date(x).toLocaleString('vi-VN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch(e) { return String(x); }
+    try {
+      return new Date(x).toLocaleString('vi-VN', { timeZone: 'Asia/Bangkok', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    } catch(e) { return String(x); }
   }
 
   function updateOverview(d) {
@@ -175,6 +191,10 @@
     document.getElementById('statBalance').textContent = 'Vốn: ' + (d.paper_balance != null ? d.paper_balance : 0).toFixed(2);
     document.getElementById('statCapitalOpen').textContent = 'Capital_Open: ' + (d.paper_capital_open != null ? d.paper_capital_open : d.paper_balance || 0).toFixed(2);
     setStatusBadge(d.paper_status || 'stopped');
+    var levEl = document.getElementById('inputLeverage');
+    var pctEl = document.getElementById('inputWalletPct');
+    if (levEl != null) levEl.value = d.paper_leverage_display != null ? Number(d.paper_leverage_display) : 20;
+    if (pctEl != null) pctEl.value = d.paper_wallet_pct_display != null ? (Number(d.paper_wallet_pct_display) * 100) : 30;
   }
 
   function fetchOrders() {
@@ -186,9 +206,11 @@
         const rowClass = pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
         const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
         const pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
-        // % PnL: luôn hiển thị số (lệnh mở = real-time từ API, lệnh đóng = đã lưu)
+        // % PnL = PnL so với notional (tổng giá trị lệnh); %PnL vốn = PnL so với vốn lúc vào
         const pctVal = o.pct_pnl != null ? Number(o.pct_pnl) : null;
         const pctPnl = pctVal != null ? ((pctVal >= 0 ? '+' : '') + pctVal.toFixed(2) + '%') : '—';
+        const pctCapVal = o.pct_pnl_capital != null ? Number(o.pct_pnl_capital) : null;
+        const pctPnlCapital = pctCapVal != null ? ((pctCapVal >= 0 ? '+' : '') + pctCapVal.toFixed(2) + '%') : '—';
         const capAfter = o.capital_after != null ? Number(o.capital_after).toFixed(2) : '—';
         const id = o.is_open ? '•' : (o.id != null ? o.id : idx + 1);
         const actionCell = o.is_open
@@ -197,7 +219,7 @@
         return '<tr class="' + rowClass + '"><td>' + id + '</td><td>' + (o.symbol || '') + '</td><td>' + (o.side || '') + (o.is_open ? ' (mở)' : '') +
           '</td><td>' + formatDate(o.entry_time) + '</td><td>' + (o.entry_price != null ? Number(o.entry_price).toFixed(2) : '') +
           '</td><td>' + formatDate(o.exit_time) + '</td><td>' + (o.exit_price != null ? Number(o.exit_price).toFixed(2) : '') +
-          '</td><td class="' + pnlClass + '">' + pnlStr + '</td><td class="' + pnlClass + '">' + pctPnl + '</td><td>' + capAfter + '</td><td>' + (o.exit_reason || '—') + '</td>' + actionCell + '</tr>';
+          '</td><td class="' + pnlClass + '">' + pnlStr + '</td><td class="' + pnlClass + '">' + pctPnl + '</td><td class="' + pnlClass + '">' + pctPnlCapital + '</td><td>' + capAfter + '</td><td>' + (o.exit_reason || '—') + '</td>' + actionCell + '</tr>';
       }).join('');
       ordersBody.querySelectorAll('.btn-close-order').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -207,7 +229,6 @@
           }).catch(() => alert('Lỗi kết nối'));
         });
       });
-      // Cập nhật luôn thanh trạng thái (Lệnh đã hoàn thành, PNL_Open, Capital_Open, Lệnh_Open) theo nhịp list lệnh
       fetch('/api/status').then(r => r.json()).then(updateOverview).catch(() => {});
     }).catch(() => {});
   }
@@ -233,8 +254,11 @@
     const interval = timeframeSelect.value;
     const timeframeChanged = interval !== currentTimeframe;
     currentTimeframe = interval;
-    if (chartPrice && userHasZoomedOrPanned && !forceFitContent && !timeframeChanged) {
-      try { lastVisibleRange = chartPrice.timeScale().getVisibleRange(); } catch (e) { lastVisibleRange = null; }
+    if (chartPrice && !forceFitContent && !timeframeChanged) {
+      try {
+        const range = chartPrice.timeScale().getVisibleRange();
+        if (range && range.from != null && range.to != null) lastVisibleRange = { from: range.from, to: range.to };
+      } catch (e) { lastVisibleRange = null; }
     }
     fetch('/api/klines?interval=' + encodeURIComponent(interval) + '&limit=500')
       .then(r => r.json())
@@ -269,17 +293,19 @@
           if (chartIndicator) chartIndicator.timeScale().fitContent();
           userHasZoomedOrPanned = false;
         } else if (chartPrice && lastVisibleRange && lastVisibleRange.from != null && lastVisibleRange.to != null) {
-          try {
-            chartPrice.timeScale().setVisibleRange(lastVisibleRange);
-            if (chartIndicator) chartIndicator.timeScale().setVisibleRange(lastVisibleRange);
-          } catch (e) {}
+          var range = { from: lastVisibleRange.from, to: lastVisibleRange.to };
+          setTimeout(function() {
+            try {
+              chartPrice.timeScale().setVisibleRange(range);
+              if (chartIndicator) chartIndicator.timeScale().setVisibleRange(range);
+            } catch (e) {}
+          }, 0);
         }
       }).catch(() => {});
   }
 
   function initCharts() {
-    // Khoảng trống bên phải (số “bar” trống) – lớn để kéo thả giữ nguyên kích cỡ như TradingView
-    const rightOffset = 120;
+    const rightOffset = 350;
     const opts = {
       layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
       grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
@@ -289,8 +315,7 @@
         timeVisible: true,
         secondsVisible: false,
         rightBarOffset: rightOffset,
-        lockVisibleTimeRangeOnResize: false,
-        rightOffset: 0,
+        lockVisibleTimeRangeOnResize: true,
         minBarSpacing: 0.5,
       },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.2 }, borderVisible: true },
@@ -311,7 +336,7 @@
       timeScale: {
         timeVisible: true,
         rightBarOffset: rightOffset,
-        lockVisibleTimeRangeOnResize: false,
+        lockVisibleTimeRangeOnResize: true,
         minBarSpacing: 0.5,
       },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
@@ -361,6 +386,20 @@
 
   document.getElementById('btnStop').addEventListener('click', () => {
     fetch('/api/paper/stop', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
+  });
+  document.getElementById('btnCapitalRules').addEventListener('click', () => {
+    var lev = parseFloat(document.getElementById('inputLeverage').value);
+    var pct = parseFloat(document.getElementById('inputWalletPct').value);
+    if (isNaN(lev) || lev < 1 || lev > 125) { alert('Đòn bẩy phải từ 1 đến 125'); return; }
+    if (isNaN(pct) || pct < 1 || pct > 100) { alert('% vốn vào lệnh phải từ 1 đến 100'); return; }
+    fetch('/api/paper/capital-rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leverage: lev, wallet_pct: pct / 100 })
+    }).then(r => r.json()).then(d => {
+      if (d.ok) { refresh(); alert('Đã cập nhật quy tắc vốn.'); }
+      else alert(d.error || 'Lỗi');
+    }).catch(() => alert('Lỗi kết nối'));
   });
   timeframeSelect.addEventListener('change', () => { fetchKlines(true); });
 

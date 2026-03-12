@@ -35,13 +35,16 @@ class BinanceClient:
         return True  # Giá luôn lấy được qua public API
 
     def _klines_to_df(self, klines) -> pd.DataFrame:
-        """Chuyển list klines Binance -> DataFrame (timestamp, open, high, low, close, volume)."""
+        """Chuyển list klines Binance -> DataFrame (timestamp GMT+7, open, high, low, close, volume)."""
         if not klines:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"]).rename_axis("timestamp")
+        tz = getattr(settings, "TZ_NAME", "Asia/Bangkok")
         rows = []
         for k in klines:
+            ts_utc = pd.Timestamp(k[0], unit="ms", tz="UTC")
+            ts_local = ts_utc.tz_convert(tz) if hasattr(ts_utc, "tz_convert") else ts_utc
             rows.append({
-                "timestamp": pd.Timestamp(k[0], unit="ms", tz="UTC"),
+                "timestamp": ts_local,
                 "open": float(k[1]),
                 "high": float(k[2]),
                 "low": float(k[3]),

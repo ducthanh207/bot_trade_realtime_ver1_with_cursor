@@ -9,6 +9,8 @@ Khi bắt đầu: warm-up lấy đủ nến cũ để tính indicator và ra quy
 import time
 import pandas as pd
 from datetime import datetime, timezone
+from config import settings as _settings
+_tz_app = getattr(_settings, "GMT7", timezone.utc)
 
 from config import settings
 from exchange.binance_client import BinanceClient
@@ -49,6 +51,11 @@ def warm_up_klines(client: BinanceClient, symbol: str, notify_func=None) -> bool
     for attempt in range(1, WARMUP_RETRIES + 1):
         try:
             if not client.is_connected():
+                try:
+                    from telegram.notifier import notify_error
+                    notify_error("Warm-up: không kết nối Binance.", context="binance")
+                except Exception:
+                    pass
                 if notify_func:
                     notify_func("[PAPER] Warm-up: không kết nối Binance.")
                 time.sleep(WARMUP_SLEEP_SEC)
@@ -185,6 +192,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         "entry_price": entry,
                         "exit_price": best_px,
                         "side": side,
+                        "size": open_trade.get("size"),
                         "profit": best_pnl,
                         "capital_before": balance,
                         "capital_after": capital_after,
@@ -205,10 +213,12 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         save_paper_state()
                     except Exception:
                         pass
-                    if notify_func:
-                        notify_func(
-                            f"[PAPER] 🔴 Đóng lệnh {side} | PnL: {best_pnl:.2f} USDT | Lý do: {reason}"
-                        )
+                    try:
+                        from telegram.notifier import notify_trade_closed
+                        notify_trade_closed(closed, source="loop")
+                    except Exception:
+                        if notify_func:
+                            notify_func(f"[PAPER] 🔴 Đóng lệnh {side} | PnL: {best_pnl:.2f} USDT | Lý do: {reason}")
                     continue
 
             # ---------- ENTRY: không position, chỉ khi running ----------
@@ -218,7 +228,9 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                 if sig_long or sig_short:
                     side = "LONG" if sig_long else "SHORT"
                     entry_px = float(df_1m["close"].iloc[-1]) if not df_1m.empty else float(row["close"])
-                    size, margin, notional = size_and_margin(balance, entry_px)
+                    lev = state.get_paper_leverage()
+                    wct = state.get_paper_wallet_pct()
+                    size, margin, notional = size_and_margin(balance, entry_px, leverage=lev, wallet_pct=wct)
                     if size <= 0 or margin > balance:
                         time.sleep(settings.LOOP_INTERVAL_SEC)
                         continue
@@ -236,7 +248,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                             return None
                     state.set_paper_open_trade({
                         "side": side,
-                        "entry_time": datetime.now(timezone.utc),
+                        "entry_time": datetime.now(_tz_app),
                         "entry_price": entry_px,
                         "size": size,
                         "margin": margin,
@@ -255,13 +267,17 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         save_paper_state()
                     except Exception:
                         pass
-                    if notify_func:
-                        notify_func(
-                            f"[PAPER] 🟢 Mở lệnh {side} @ {entry_px:.2f} | Size: {round(size, 3)} BTC"
-                        )
+                    ot = state.get_paper_open_trade()
+                    try:
+                        from telegram.notifier import notify_trade_opened
+                        if ot:
+                            notify_trade_opened(ot, source="loop")
+                    except Exception:
+                        if notify_func:
+                            notify_func(f"[PAPER] 🟢 Mở lệnh {side} @ {entry_px:.2f} | Size: {round(size, 3)} BTC")
 
             # Status định kỳ (paper)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(_tz_app)
             if status_func and last_status_min is not None:
                 delta_min = (now - last_status_min).total_seconds() / 60
                 if delta_min >= settings.STATUS_INTERVAL_MIN:
@@ -271,6 +287,11 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                 last_status_min = now
 
         except Exception as e:
+            try:
+                from telegram.notifier import notify_error
+                notify_error(f"Paper loop: {e}", context="app")
+            except Exception:
+                pass
             if notify_func:
                 notify_func(f"[PAPER] ❌ Lỗi: {e}")
             import traceback

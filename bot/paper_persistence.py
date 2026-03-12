@@ -47,6 +47,8 @@ def save_paper_state():
             "paper_open_trade": _serialize_for_save(open_trade) if open_trade else None,
             "paper_trades": _serialize_for_save(state.get_paper_trades()),
             "paper_last_trade": _serialize_for_save(state.get_paper_last_trade()) if state.get_paper_last_trade() else None,
+            "paper_leverage": state.get_paper_leverage(),
+            "paper_wallet_pct": state.get_paper_wallet_pct(),
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=0)
@@ -81,6 +83,12 @@ def load_paper_state():
             tt["exit_time"] = _parse_dt(t.get("exit_time"))
             trades.append(tt)
         state.restore_paper_trades(trades)
+        lev = data.get("paper_leverage")
+        if lev is not None:
+            state.set_paper_leverage(float(lev))
+        wct = data.get("paper_wallet_pct")
+        if wct is not None:
+            state.set_paper_wallet_pct(float(wct))
         last = data.get("paper_last_trade")
         if last:
             last = dict(last)

@@ -2,7 +2,12 @@
 """Đọc cấu hình từ .env và biến môi trường."""
 
 import os
+from datetime import timezone, timedelta
 from pathlib import Path
+
+# Múi giờ hiển thị / lưu: GMT+7 (Việt Nam)
+GMT7 = timezone(timedelta(hours=7))
+TZ_NAME = "Asia/Bangkok"
 
 # Load .env nếu có (python-dotenv)
 try:

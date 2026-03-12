@@ -7,6 +7,8 @@ kiểm tra exit (liquidation, ATR, 4H, early) rồi entry; gọi exchange + tele
 import time
 import pandas as pd
 from datetime import datetime, timezone
+from config import settings as _live_settings
+_tz_app = getattr(_live_settings, "GMT7", timezone.utc)
 
 from config import settings
 from exchange.binance_client import BinanceClient
@@ -96,7 +98,7 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                 init_stop = entry - trail_dist if side == "LONG" else entry + trail_dist
                 open_trade = {
                     "side": side,
-                    "entry_time": datetime.now(timezone.utc),
+                    "entry_time": datetime.now(_tz_app),
                     "entry_price": entry,
                     "size": size,
                     "margin": margin,
@@ -213,7 +215,7 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                     init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
                     state.set_open_trade({
                         "side": side,
-                        "entry_time": datetime.now(timezone.utc),
+                        "entry_time": datetime.now(_tz_app),
                         "entry_price": entry_px,
                         "size": size,
                         "margin": margin,
@@ -229,7 +231,7 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                         )
 
             # Status định kỳ
-            now = datetime.now(timezone.utc)
+            now = datetime.now(_tz_app)
             if status_func and last_status_min is not None:
                 delta_min = (now - last_status_min).total_seconds() / 60
                 if delta_min >= settings.STATUS_INTERVAL_MIN:
