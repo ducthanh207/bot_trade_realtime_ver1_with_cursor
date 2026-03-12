@@ -5,6 +5,28 @@ import threading
 import requests
 from config import settings
 
+# Danh sách lệnh hiển thị trong menu Telegram (khi user bấm / hoặc menu)
+BOT_COMMANDS = [
+    ("start", "Kiểm tra bot đang chạy"),
+    ("ping", "Kiểm tra bot đang chạy"),
+    ("status", "Xem trạng thái: vốn, position, PnL, winrate"),
+    ("pnl", "Xem PnL tổng (paper)"),
+    ("stop", "Dừng paper trade"),
+]
+
+
+def _set_bot_commands() -> bool:
+    """Đăng ký menu lệnh với Telegram để hiện gợi ý khi user gõ /."""
+    if not settings.TELEGRAM_BOT_TOKEN:
+        return False
+    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/setMyCommands"
+    try:
+        commands = [{"command": c[0], "description": c[1]} for c in BOT_COMMANDS]
+        r = requests.post(url, json={"commands": commands}, timeout=10)
+        return r.status_code == 200 and r.json().get("ok")
+    except Exception:
+        return False
+
 
 def _reply(chat_id: str, text: str) -> bool:
     if not settings.TELEGRAM_BOT_TOKEN:
@@ -53,9 +75,11 @@ def _format_status():
 def run_telegram_commands(stop_event: threading.Event = None):
     """
     Long poll getUpdates: /status, /pnl (paper), /stop (dừng paper), /start, /ping.
+    Đăng ký menu lệnh với Telegram khi khởi động để hiện gợi ý khi user gõ /.
     """
     if not settings.TELEGRAM_BOT_TOKEN:
         return
+    _set_bot_commands()
     url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/getUpdates"
     offset = 0
     while stop_event is None or not stop_event.is_set():
