@@ -173,6 +173,12 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                 if candidates:
                     best_time, best_pnl, best_px, reason = min(candidates, key=lambda x: (x[0], -x[1]))
                     capital_after = balance + best_pnl
+                    def _f(v):
+                        try:
+                            x = float(v)
+                            return x if pd.notna(x) else None
+                        except (TypeError, ValueError):
+                            return None
                     closed = {
                         "entry_time": open_trade.get("entry_time"),
                         "exit_time": best_time,
@@ -183,11 +189,22 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         "capital_before": balance,
                         "capital_after": capital_after,
                         "exit_reason": reason,
+                        "entry_rsi": open_trade.get("entry_rsi"),
+                        "entry_ema_rsi": open_trade.get("entry_ema_rsi"),
+                        "entry_wma_rsi": open_trade.get("entry_wma_rsi"),
+                        "exit_rsi": _f(row.get("RSI")),
+                        "exit_ema_rsi": _f(row.get("EMA_RSI")),
+                        "exit_wma_rsi": _f(row.get("WMA_RSI")),
                     }
                     state.set_paper_open_trade(None)
                     state.set_paper_last_trade(closed)
                     state.append_paper_trade(closed)
                     state.set_paper_balance(capital_after)
+                    try:
+                        from bot.paper_persistence import save_paper_state
+                        save_paper_state()
+                    except Exception:
+                        pass
                     if notify_func:
                         notify_func(
                             f"[PAPER] 🔴 Đóng lệnh {side} | PnL: {best_pnl:.2f} USDT | Lý do: {reason}"
@@ -210,6 +227,13 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                     atr_now = row["ATR"]
                     trail_dist = atr_now * settings.ATR_MULTIPLIER
                     init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
+                    # Lưu 3 đường lúc vào (chỉ dùng khi xuất CSV, không hiển thị trên UI)
+                    def _f(v):
+                        try:
+                            x = float(v)
+                            return x if pd.notna(x) else None
+                        except (TypeError, ValueError):
+                            return None
                     state.set_paper_open_trade({
                         "side": side,
                         "entry_time": datetime.now(timezone.utc),
@@ -221,8 +245,16 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         "notional": notional,
                         "trail_stop": init_stop,
                         "last_sl_check": df_1m.index[-1] if not df_1m.empty else ts_4h,
+                        "entry_rsi": _f(row.get("RSI")),
+                        "entry_ema_rsi": _f(row.get("EMA_RSI")),
+                        "entry_wma_rsi": _f(row.get("WMA_RSI")),
                     })
                     state.set_paper_balance(balance_after_fee)
+                    try:
+                        from bot.paper_persistence import save_paper_state
+                        save_paper_state()
+                    except Exception:
+                        pass
                     if notify_func:
                         notify_func(
                             f"[PAPER] 🟢 Mở lệnh {side} @ {entry_px:.2f} | Size: {round(size, 3)} BTC"

@@ -8,7 +8,9 @@ _root = Path(__file__).resolve().parents[1]
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from flask import Flask, jsonify, request, render_template
+import csv
+import io
+from flask import Flask, jsonify, request, render_template, Response
 from datetime import datetime
 
 _web_dir = Path(__file__).resolve().parent
@@ -50,7 +52,37 @@ def index():
 
 @app.route("/api/status")
 def api_status():
-    return jsonify(get_status())
+    d = get_status()
+    # PNL_Open, Capital_Open, Lệnh_Open (real-time khi có lệnh mở)
+    open_trade = d.get("paper_open_trade")
+    if open_trade:
+        try:
+            from config import settings
+            client = _get_client()
+            df = client.get_klines(settings.SYMBOL, "1m", 1)
+            current_price = float(df["close"].iloc[-1]) if not df.empty else None
+        except Exception:
+            current_price = None
+        if current_price is not None:
+            entry = float(open_trade.get("entry_price") or 0)
+            size = float(open_trade.get("size") or 0)
+            side = str(open_trade.get("side", "")).upper()
+            if side == "LONG":
+                pnl_open = (current_price - entry) * size
+            else:
+                pnl_open = (entry - current_price) * size
+            balance = float(d.get("paper_balance") or 0)
+            d["paper_pnl_open"] = round(pnl_open, 2)
+            d["paper_capital_open"] = round(balance + pnl_open, 2)
+        else:
+            d["paper_pnl_open"] = 0.0
+            d["paper_capital_open"] = float(d.get("paper_balance") or 0)
+        d["paper_orders_open_count"] = 1
+    else:
+        d["paper_pnl_open"] = 0.0
+        d["paper_capital_open"] = float(d.get("paper_balance") or 0)
+        d["paper_orders_open_count"] = 0
+    return jsonify(d)
 
 
 @app.route("/api/paper/start", methods=["POST"])
@@ -62,6 +94,11 @@ def api_paper_start():
             return jsonify({"ok": False, "error": "initial_capital phải > 0"}), 400
         from bot import state
         state.paper_start(capital)
+        try:
+            from bot.paper_persistence import save_paper_state
+            save_paper_state()
+        except Exception:
+            pass
         return jsonify({"ok": True, "message": "Đã kích hoạt paper trade."})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -83,6 +120,124 @@ def api_paper_stop():
         from bot import state
         state.paper_stop()
         return jsonify({"ok": True, "message": "Đã dừng paper trade."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/paper/close", methods=["POST"])
+def api_paper_close():
+    """Chốt lệnh paper đang mở từ web."""
+    try:
+        ok, msg, extra = _close_paper_position()
+        if not ok:
+            return jsonify({"ok": False, "error": msg}), 400
+        try:
+            from bot.paper_persistence import save_paper_state
+            save_paper_state()
+        except Exception:
+            pass
+        return jsonify({"ok": True, "message": msg, **(extra or {})})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/restore-pending")
+def api_restore_pending():
+    """Sau khi pull/deploy, nếu đã load state có lệnh mở thì frontend hiện popup hỏi giữ/đóng."""
+    try:
+        from bot.paper_persistence import get_restore_pending
+        return jsonify({"pending": get_restore_pending()})
+    except Exception:
+        return jsonify({"pending": False})
+
+
+def _close_paper_position():
+    """Đóng lệnh paper đang mở (dùng cho api_paper_close và restore-choice). Trả (ok, msg, err)."""
+    from bot import state
+    from config import settings
+    from datetime import datetime, timezone
+    open_trade = state.get_paper_open_trade()
+    if not open_trade:
+        return False, "Không có lệnh nào đang mở.", None
+    balance = state.get_paper_balance()
+    entry = float(open_trade["entry_price"])
+    side = str(open_trade["side"]).upper()
+    size = float(open_trade["size"])
+    try:
+        client = _get_client()
+        df = client.get_klines(settings.SYMBOL, "1m", 1)
+        exit_px = float(df["close"].iloc[-1]) if not df.empty else entry
+    except Exception:
+        exit_px = entry
+    if side == "LONG":
+        pnl = (exit_px - entry) * size
+    else:
+        pnl = (entry - exit_px) * size
+    fee_out = size * exit_px * getattr(settings, "TAKER_FEE", 0.0004)
+    pnl_net = pnl - fee_out
+    capital_after = balance + pnl_net
+    exit_rsi = exit_ema_rsi = exit_wma_rsi = None
+    try:
+        from strategy.indicators import add_indicators
+        df_4h = _get_client().get_klines(settings.SYMBOL, "4h", 5)
+        if not df_4h.empty:
+            df_4h = add_indicators(df_4h)
+            r = df_4h.iloc[-1]
+            def _f(v):
+                try:
+                    x = float(v)
+                    return x if (x == x) else None
+                except (TypeError, ValueError):
+                    return None
+            exit_rsi, exit_ema_rsi, exit_wma_rsi = _f(r.get("RSI")), _f(r.get("EMA_RSI")), _f(r.get("WMA_RSI"))
+    except Exception:
+        pass
+    closed = {
+        "entry_time": open_trade.get("entry_time"),
+        "exit_time": datetime.now(timezone.utc),
+        "entry_price": entry,
+        "exit_price": exit_px,
+        "side": side,
+        "profit": pnl_net,
+        "capital_before": balance,
+        "capital_after": capital_after,
+        "exit_reason": "MANUAL_WEB",
+        "entry_rsi": open_trade.get("entry_rsi"),
+        "entry_ema_rsi": open_trade.get("entry_ema_rsi"),
+        "entry_wma_rsi": open_trade.get("entry_wma_rsi"),
+        "exit_rsi": exit_rsi,
+        "exit_ema_rsi": exit_ema_rsi,
+        "exit_wma_rsi": exit_wma_rsi,
+    }
+    state.set_paper_open_trade(None)
+    state.set_paper_last_trade(closed)
+    state.append_paper_trade(closed)
+    state.set_paper_balance(capital_after)
+    return True, "Đã chốt lệnh.", {"pnl": round(pnl_net, 2), "capital_after": round(capital_after, 2)}
+
+
+@app.route("/api/restore-choice", methods=["POST"])
+def api_restore_choice():
+    """User chọn: giữ vị thế cũ (keep=true) hoặc đóng lệnh (keep=false)."""
+    try:
+        from bot.paper_persistence import get_restore_pending, clear_restore_pending
+        data = request.get_json(force=True, silent=True) or {}
+        keep = data.get("keep", True)
+        if not get_restore_pending():
+            return jsonify({"ok": True, "message": "Không có lựa chọn đang chờ."})
+        if keep:
+            clear_restore_pending()
+            return jsonify({"ok": True, "message": "Đã giữ vị thế paper trade."})
+        ok, msg, extra = _close_paper_position()
+        clear_restore_pending()
+        if ok:
+            try:
+                from bot.paper_persistence import save_paper_state
+                save_paper_state()
+            except Exception:
+                pass
+            return jsonify({"ok": True, "message": msg, **(extra or {})})
+        return jsonify({"ok": False, "error": msg}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -179,6 +334,8 @@ def api_orders():
                     pnl = (entry - current_price) * size
             else:
                 pnl = 0.0
+            notional = entry * size if entry and size else 1
+            pct_pnl_open = round((pnl / notional * 100), 2) if notional else 0
             orders.append({
                 "id": "open",
                 "side": side,
@@ -187,7 +344,7 @@ def api_orders():
                 "exit_time": None,
                 "exit_price": None,
                 "pnl": round(pnl, 2),
-                "pct_pnl": None,
+                "pct_pnl": pct_pnl_open,
                 "capital_after": None,
                 "is_open": True,
                 "symbol": settings.SYMBOL,
@@ -217,6 +374,104 @@ def api_orders():
         return jsonify({"orders": orders})
     except Exception as e:
         return jsonify({"orders": [], "error": str(e)})
+
+
+def _orders_for_csv():
+    """Danh sách lệnh đầy đủ (kể cả 3 đường lúc vào/thoát) để xuất CSV."""
+    from bot import state
+    from config import settings
+    status = get_status()
+    if status.get("error"):
+        return [], None
+    open_trade = status.get("paper_open_trade")
+    trades = list(status.get("paper_trades") or [])
+    symbol = getattr(settings, "SYMBOL", "BTCUSDT")
+
+    def _ts(v):
+        if v is None:
+            return ""
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        return str(v)
+
+    def _n(v):
+        if v is None or (isinstance(v, float) and v != v):
+            return ""
+        return v
+
+    rows = []
+    if open_trade:
+        entry = float(open_trade.get("entry_price") or 0)
+        side = str(open_trade.get("side", "")).upper()
+        rows.append({
+            "id": "open",
+            "symbol": symbol,
+            "side": side,
+            "entry_time": _ts(open_trade.get("entry_time")),
+            "entry_price": entry,
+            "exit_time": "",
+            "exit_price": "",
+            "profit": "",
+            "pct_pnl": "",
+            "capital_after": "",
+            "exit_reason": "",
+            "entry_rsi": _n(open_trade.get("entry_rsi")),
+            "entry_ema_rsi": _n(open_trade.get("entry_ema_rsi")),
+            "entry_wma_rsi": _n(open_trade.get("entry_wma_rsi")),
+            "exit_rsi": "",
+            "exit_ema_rsi": "",
+            "exit_wma_rsi": "",
+        })
+    for i, t in enumerate(reversed(trades)):
+        profit = float(t.get("profit", 0))
+        cap_before = float(t.get("capital_before") or 0)
+        cap_after = t.get("capital_after")
+        if cap_after is not None:
+            cap_after = round(float(cap_after), 2)
+        pct_pnl = round((profit / cap_before * 100), 2) if cap_before else 0
+        rows.append({
+            "id": len(rows) + 1,
+            "symbol": symbol,
+            "side": str(t.get("side", "")).upper(),
+            "entry_time": _ts(t.get("entry_time")),
+            "entry_price": t.get("entry_price"),
+            "exit_time": _ts(t.get("exit_time")),
+            "exit_price": t.get("exit_price"),
+            "profit": round(profit, 2),
+            "pct_pnl": pct_pnl,
+            "capital_after": cap_after if cap_after is not None else "",
+            "exit_reason": t.get("exit_reason") or "",
+            "entry_rsi": _n(t.get("entry_rsi")),
+            "entry_ema_rsi": _n(t.get("entry_ema_rsi")),
+            "entry_wma_rsi": _n(t.get("entry_wma_rsi")),
+            "exit_rsi": _n(t.get("exit_rsi")),
+            "exit_ema_rsi": _n(t.get("exit_ema_rsi")),
+            "exit_wma_rsi": _n(t.get("exit_wma_rsi")),
+        })
+    return rows, symbol
+
+
+@app.route("/api/export/csv")
+def api_export_csv():
+    """Xuất toàn bộ list lệnh + 3 đường (RSI, EMA_RSI, WMA_RSI) lúc vào và thoát dạng CSV."""
+    try:
+        rows, symbol = _orders_for_csv()
+        buf = io.StringIO()
+        if not rows:
+            buf.write("id,symbol,side,entry_time,entry_price,exit_time,exit_price,profit,pct_pnl,capital_after,exit_reason,entry_rsi,entry_ema_rsi,entry_wma_rsi,exit_rsi,exit_ema_rsi,exit_wma_rsi\n")
+        else:
+            cols = list(rows[0].keys())
+            w = csv.DictWriter(buf, fieldnames=cols, lineterminator="\n")
+            w.writeheader()
+            w.writerows(rows)
+        filename = f"orders_{symbol}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+        return Response(
+            buf.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        return Response(f"Lỗi: {e}", status=500, mimetype="text/plain")
 
 
 def run_web(host=None, port=None):

@@ -25,6 +25,11 @@ from telegram.commands import run_telegram_commands
 
 def main():
     state.set_bot_started_at()
+    try:
+        from bot.paper_persistence import load_paper_state
+        load_paper_state()  # Khôi phục vốn + lệnh từ file (nếu có) sau khi pull/deploy
+    except Exception:
+        pass
     client = BinanceClient()  # Giá từ API công khai Binance, không cần API key
 
     def notify(text: str):

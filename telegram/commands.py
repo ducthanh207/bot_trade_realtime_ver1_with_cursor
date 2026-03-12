@@ -280,6 +280,15 @@ def _do_paper_entry(chat_id: str, side: str, pct: float) -> str:
         balance_after = balance - fee_in
         trail_dist = atr_now * settings.ATR_MULTIPLIER
         init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
+        def _f(v):
+            try:
+                x = float(v)
+                return x if (x == x) else None  # NaN check
+            except (TypeError, ValueError):
+                return None
+        entry_rsi = _f(row_4h.get("RSI")) if row_4h is not None else None
+        entry_ema_rsi = _f(row_4h.get("EMA_RSI")) if row_4h is not None else None
+        entry_wma_rsi = _f(row_4h.get("WMA_RSI")) if row_4h is not None else None
         state.set_paper_open_trade({
             "side": side,
             "entry_time": datetime.now(timezone.utc),
@@ -291,8 +300,16 @@ def _do_paper_entry(chat_id: str, side: str, pct: float) -> str:
             "notional": notional,
             "trail_stop": init_stop,
             "last_sl_check": df.index[-1],
+            "entry_rsi": entry_rsi,
+            "entry_ema_rsi": entry_ema_rsi,
+            "entry_wma_rsi": entry_wma_rsi,
         })
         state.set_paper_balance(balance_after)
+        try:
+            from bot.paper_persistence import save_paper_state
+            save_paper_state()
+        except Exception:
+            pass
         return f"Đã vào lệnh {side} @ {entry_px:.2f} | % vốn: {pct}% | Size: {size:.4f} | Margin: {margin:.2f} USDT"
     except Exception as e:
         return f"Lỗi: {e}"
@@ -323,6 +340,29 @@ def _do_paper_close(chat_id: str) -> str:
     fee_out = size * exit_px * settings.TAKER_FEE
     pnl_net = pnl - fee_out
     capital_after = balance + pnl_net
+    # 3 đường lúc thoát (lấy từ nến 4h gần nhất nếu có)
+    exit_rsi = exit_ema_rsi = exit_wma_rsi = None
+    try:
+        from strategy.indicators import add_indicators
+        _client = BinanceClient()
+        df_4h = _client.get_klines(settings.SYMBOL, "4h", 5)
+        if not df_4h.empty:
+            df_4h = add_indicators(df_4h)
+            r = df_4h.iloc[-1]
+        else:
+            r = None
+    except Exception:
+        r = None
+    if r is not None:
+        def _f(v):
+            try:
+                x = float(v)
+                return x if (x == x) else None
+            except (TypeError, ValueError):
+                return None
+        exit_rsi = _f(r.get("RSI"))
+        exit_ema_rsi = _f(r.get("EMA_RSI"))
+        exit_wma_rsi = _f(r.get("WMA_RSI"))
     closed = {
         "entry_time": open_trade.get("entry_time"),
         "exit_time": datetime.now(timezone.utc),
@@ -333,11 +373,22 @@ def _do_paper_close(chat_id: str) -> str:
         "capital_before": balance,
         "capital_after": capital_after,
         "exit_reason": "MANUAL_TELEGRAM",
+        "entry_rsi": open_trade.get("entry_rsi"),
+        "entry_ema_rsi": open_trade.get("entry_ema_rsi"),
+        "entry_wma_rsi": open_trade.get("entry_wma_rsi"),
+        "exit_rsi": exit_rsi,
+        "exit_ema_rsi": exit_ema_rsi,
+        "exit_wma_rsi": exit_wma_rsi,
     }
     state.set_paper_open_trade(None)
     state.set_paper_last_trade(closed)
     state.append_paper_trade(closed)
     state.set_paper_balance(capital_after)
+    try:
+        from bot.paper_persistence import save_paper_state
+        save_paper_state()
+    except Exception:
+        pass
     return f"Đã đóng lệnh {side}. PnL: {pnl_net:+.2f} USDT | Vốn sau: {capital_after:.2f} USDT"
 
 

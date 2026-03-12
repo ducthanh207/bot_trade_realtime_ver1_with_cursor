@@ -146,6 +146,12 @@ def get_paper_trades():
     return list(_paper_trades)
 
 
+def restore_paper_trades(trades: list):
+    """Khôi phục danh sách lệnh đã đóng (sau khi load từ file)."""
+    global _paper_trades
+    _paper_trades = list(trades) if trades else []
+
+
 def set_paper_last_trade(trade: dict or None):
     global _paper_last_trade
     _paper_last_trade = trade
