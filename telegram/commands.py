@@ -378,6 +378,7 @@ def _do_paper_close(chat_id: str) -> str:
         "exit_price": exit_px,
         "side": side,
         "size": open_trade.get("size"),
+        "margin": open_trade.get("margin"),
         "profit": pnl_net,
         "capital_before": balance,
         "capital_after": capital_after,

@@ -88,14 +88,22 @@ def get_status_update_text() -> str:
         if pos:
             entry = float(pos.get("entry_price") or 0)
             size = float(pos.get("size") or 0)
+            margin = pos.get("margin")
+            leverage = getattr(settings, "LEVERAGE", 20.0)
+            try:
+                from bot import state
+                leverage = state.get_paper_leverage() or leverage
+            except Exception:
+                pass
+            if margin is None and entry and size and leverage:
+                margin = (entry * size) / leverage
             current_px = _get_current_price()
             if current_px and entry and size:
                 if pos_label == "Long":
                     pnl_usdt = (current_px - entry) * size
                 else:
                     pnl_usdt = (entry - current_px) * size
-                notional = entry * size
-                pnl_pct_trade = round((pnl_usdt / notional * 100), 2) if notional else 0
+                pnl_pct_trade = round((pnl_usdt / margin * 100), 2) if margin else 0
                 pnl_pct_capital = round((pnl_usdt / balance * 100), 2) if balance else 0
             else:
                 pnl_usdt = 0.0
@@ -182,8 +190,24 @@ def notify_trade_closed(closed: dict, source: str = "loop") -> bool:
         entry_px = closed.get("entry_price")
         exit_px = closed.get("exit_price")
         reason = closed.get("exit_reason") or "—"
+        leverage = getattr(settings, "LEVERAGE", 20.0)
+        try:
+            from bot import state
+            leverage = state.get_paper_leverage() or leverage
+        except Exception:
+            pass
+        size = float(closed.get("size") or 0)
+        entry_f = float(entry_px) if entry_px is not None else 0
+        # % PnL = profit / vốn vào lệnh (margin) * 100; % vốn = profit / capital_before * 100
+        margin_calc = (entry_f * size) / float(leverage) if (entry_f and size and leverage) else None
+        margin = closed.get("margin")
+        if margin is None or margin <= 0:
+            margin = margin_calc
+        if cap_before and margin and margin > cap_before:
+            margin = margin_calc
+        pct_pnl = round((profit / margin * 100), 2) if margin else 0
         pct_cap = round((profit / cap_before * 100), 2) if cap_before else 0
-        pct_sign = "+" if pct_cap >= 0 else ""
+        pct_sign = "+" if pct_pnl >= 0 else ""
         src_label = {"loop": "Tự động (Loop)", "web": "Web", "telegram": "Telegram"}.get(source, source)
         ep = float(entry_px) if entry_px is not None else 0
         xp = float(exit_px) if exit_px is not None else 0
@@ -193,6 +217,7 @@ def notify_trade_closed(closed: dict, source: str = "loop") -> bool:
             f"Side: {side}",
             f"Trạng thái: Đã đóng",
             f"PnL: {profit:+.2f} USDT",
+            f"% PnL (vốn lệnh): {pct_sign}{pct_pnl}%",
             f"% vốn: {pct_sign}{pct_cap}%",
             f"Vốn sau: {cap_after:.2f} USDT",
             f"Vào: {_format_dt(closed.get('entry_time'))} @ {ep:.2f}",

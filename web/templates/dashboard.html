@@ -206,7 +206,7 @@
         const rowClass = pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
         const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
         const pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
-        // % PnL = PnL so với notional (tổng giá trị lệnh); %PnL vốn = PnL so với vốn lúc vào
+        // % PnL = PnL / vốn lệnh (margin, 300u) = 40/300 ≈ 13.33%; % PnL vốn = PnL / tổng vốn (capital)
         const pctVal = o.pct_pnl != null ? Number(o.pct_pnl) : null;
         const pctPnl = pctVal != null ? ((pctVal >= 0 ? '+' : '') + pctVal.toFixed(2) + '%') : '—';
         const pctCapVal = o.pct_pnl_capital != null ? Number(o.pct_pnl_capital) : null;
@@ -233,10 +233,19 @@
     }).catch(() => {});
   }
 
+  // Chart trục thời gian: luôn hiển thị giờ GMT+7. Nếu máy đang UTC thì cộng 7h để nhãn đúng.
+  const GMT7_OFFSET_SEC = 7 * 3600;
+  const isBrowserUTC = (function() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone !== 'Asia/Bangkok';
+    } catch (e) { return true; }
+  })();
   function toChartTime(isoStr) {
     if (!isoStr) return null;
     const d = new Date(isoStr);
-    return Math.floor(d.getTime() / 1000);
+    let sec = Math.floor(d.getTime() / 1000);
+    if (isBrowserUTC) sec += GMT7_OFFSET_SEC;
+    return sec;
   }
 
   function buildMarkers(orders) {

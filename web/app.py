@@ -52,7 +52,12 @@ def get_status():
 
 @app.route("/")
 def index():
-    return render_template("dashboard.html")
+    """Trang dashboard. No-cache để sau khi pull code + restart, refresh trình duyệt lấy bản mới."""
+    resp = app.make_response(render_template("dashboard.html"))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/api/status")
@@ -264,6 +269,7 @@ def _close_paper_position():
         "exit_price": exit_px,
         "side": side,
         "size": open_trade.get("size"),
+        "margin": open_trade.get("margin"),
         "profit": pnl_net,
         "capital_before": balance,
         "capital_after": capital_after,
@@ -377,6 +383,27 @@ def api_klines():
         return jsonify({"ohlc": [], "indicators": {}, "error": str(e)})
 
 
+def _pct_pnl(profit: float, margin: float) -> float:
+    """% PnL = profit / vốn vào lệnh (margin) * 100. VD: 40u lời, 300u margin → 13.33%."""
+    return round((profit / margin * 100), 2) if margin and margin != 0 else 0.0
+
+
+def _pct_pnl_capital(profit: float, capital_before: float) -> float:
+    """% PnL vốn = profit / capital_before * 100 (theo tổng vốn tài khoản lúc vào lệnh)."""
+    return round((profit / capital_before * 100), 2) if capital_before and capital_before != 0 else 0.0
+
+
+def _effective_margin(entry: float, size: float, leverage: float, stored_margin=None, capital_before=None):
+    """Vốn vào lệnh (margin) = notional/leverage. Nếu stored sai (vd > capital) thì dùng margin_calc."""
+    margin_calc = (entry * size) / float(leverage) if (entry and size and leverage) else None
+    margin = stored_margin
+    if margin is None or margin <= 0:
+        margin = margin_calc
+    if capital_before and margin and margin > capital_before:
+        margin = margin_calc
+    return margin
+
+
 @app.route("/api/orders")
 def api_orders():
     """Danh sách lệnh (mở + đã đóng), mới nhất lên đầu; mỗi lệnh có pnl (realized hoặc unrealized)."""
@@ -398,11 +425,13 @@ def api_orders():
             except Exception:
                 pass
         orders = []
+        leverage = state.get_paper_leverage() or getattr(settings, "LEVERAGE", 20.0)
         if open_trade:
             entry = float(open_trade.get("entry_price") or 0)
             side = str(open_trade.get("side", "")).upper()
             size = float(open_trade.get("size") or 0)
             cap_before_open = float(open_trade.get("capital_before") or 0)
+            margin_open = _effective_margin(entry, size, leverage, open_trade.get("margin"), cap_before_open)
             if current_price and entry and size:
                 if side == "LONG":
                     pnl = (current_price - entry) * size
@@ -410,9 +439,8 @@ def api_orders():
                     pnl = (entry - current_price) * size
             else:
                 pnl = 0.0
-            notional = entry * size if entry and size else 1
-            pct_pnl_open = round((pnl / notional * 100), 2) if notional else 0
-            pct_pnl_capital_open = round((pnl / cap_before_open * 100), 2) if cap_before_open else 0
+            pct_pnl_open = _pct_pnl(pnl, margin_open) if margin_open else 0.0
+            pct_pnl_capital_open = _pct_pnl_capital(pnl, cap_before_open)
             orders.append({
                 "id": "open",
                 "side": side,
@@ -436,9 +464,9 @@ def api_orders():
                 cap_after = round(float(cap_after), 2)
             entry_px = float(t.get("entry_price") or 0)
             size = float(t.get("size") or 0)
-            notional = entry_px * size if entry_px and size else 0
-            pct_pnl = round((profit / notional * 100), 2) if notional else None
-            pct_pnl_capital = round((profit / cap_before * 100), 2) if cap_before else None
+            margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before)
+            pct_pnl = _pct_pnl(profit, margin_t) if margin_t else None
+            pct_pnl_capital = _pct_pnl_capital(profit, cap_before) if cap_before else None
             orders.append({
                 "id": len(orders) + 1,
                 "side": str(t.get("side", "")).upper(),
@@ -469,6 +497,7 @@ def _orders_for_csv():
     open_trade = status.get("paper_open_trade")
     trades = list(status.get("paper_trades") or [])
     symbol = getattr(settings, "SYMBOL", "BTCUSDT")
+    leverage = state.get_paper_leverage() or getattr(settings, "LEVERAGE", 20.0)
 
     def _ts(v):
         if v is None:
@@ -514,9 +543,9 @@ def _orders_for_csv():
             cap_after = round(float(cap_after), 2)
         entry_px = float(t.get("entry_price") or 0)
         size = float(t.get("size") or 0)
-        notional = entry_px * size if entry_px and size else 0
-        pct_pnl = round((profit / notional * 100), 2) if notional else ""
-        pct_pnl_capital = round((profit / cap_before * 100), 2) if cap_before else ""
+        margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before)
+        pct_pnl = _pct_pnl(profit, margin_t) if margin_t else ""
+        pct_pnl_capital = _pct_pnl_capital(profit, cap_before) if cap_before else ""
         rows.append({
             "id": len(rows) + 1,
             "symbol": symbol,

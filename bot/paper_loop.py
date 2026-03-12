@@ -186,6 +186,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                             return x if pd.notna(x) else None
                         except (TypeError, ValueError):
                             return None
+                    margin = open_trade.get("margin")
                     closed = {
                         "entry_time": open_trade.get("entry_time"),
                         "exit_time": best_time,
@@ -193,6 +194,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         "exit_price": best_px,
                         "side": side,
                         "size": open_trade.get("size"),
+                        "margin": margin,
                         "profit": best_pnl,
                         "capital_before": balance,
                         "capital_after": capital_after,
