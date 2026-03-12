@@ -35,9 +35,9 @@ class BinanceClient:
         return True  # Giá luôn lấy được qua public API
 
     def _klines_to_df(self, klines) -> pd.DataFrame:
-        """Chuyển list klines Binance -> DataFrame (timestamp, open, high, low, close)."""
+        """Chuyển list klines Binance -> DataFrame (timestamp, open, high, low, close, volume)."""
         if not klines:
-            return pd.DataFrame(columns=["open", "high", "low", "close"]).rename_axis("timestamp")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"]).rename_axis("timestamp")
         rows = []
         for k in klines:
             rows.append({
@@ -46,6 +46,7 @@ class BinanceClient:
                 "high": float(k[2]),
                 "low": float(k[3]),
                 "close": float(k[4]),
+                "volume": float(k[5]) if len(k) > 5 else 0,
             })
         df = pd.DataFrame(rows).set_index("timestamp")
         df.index.name = "timestamp"

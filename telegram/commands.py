@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Long poll Telegram: /status, /pnl, /stop, /advise, /start, /ping – paper trade + tư vấn vào/đóng lệnh."""
+"""Long poll Telegram: /status, /now, /pnl, /stop, /advise, /start, /ping – paper trade + tư vấn vào/đóng lệnh."""
 
 import threading
 import requests
@@ -13,7 +13,8 @@ _pending_lock = threading.Lock()
 BOT_COMMANDS = [
     ("start", "Kiểm tra bot đang chạy"),
     ("ping", "Kiểm tra bot đang chạy"),
-    ("status", "Xem trạng thái: vốn, position, PnL, winrate"),
+    ("status", "Xem trạng thái tổng: vốn, position, PnL tổng, %PNL"),
+    ("now", "Xem trạng thái lệnh ngay (PNL, điểm đóng...)"),
     ("pnl", "Xem PnL tổng (paper)"),
     ("advise", "Tư vấn tín hiệu + nút vào/đóng lệnh"),
     ("trade", "Vào lệnh ngay hoặc đóng lệnh (nút bấm)"),
@@ -58,30 +59,37 @@ def _answer_callback(callback_query_id: str, text: str = ""):
 
 
 def _format_status():
+    """Nội dung /status: tổng quan đầy đủ."""
     from bot import state
     d = state.to_status_dict()
-    balance = d.get("paper_balance", 0)
+    balance = float(d.get("paper_balance") or 0)
     pos = d.get("paper_open_trade")
-    pos_str = "Không"
+    pos_str = "Không có"
     if pos:
-        pos_str = f"{pos.get('side', '')} @ {pos.get('entry_price', 0):.2f}"
+        pos_str = f"{pos.get('side', '')} @ {float(pos.get('entry_price') or 0):.2f}"
     n = d.get("paper_trades_count", 0)
-    total_pnl = d.get("paper_total_pnl", 0)
-    winrate = d.get("paper_winrate", 0)
+    total_pnl = float(d.get("paper_total_pnl") or 0)
+    initial = float(d.get("paper_initial_capital") or 0)
+    pct_pnl = round((total_pnl / initial * 100), 2) if initial and initial > 0 else 0
     status = d.get("paper_status", "stopped")
     started = d.get("paper_started_at") or "N/A"
+    if started and started != "N/A":
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            started = dt.strftime("%Y-%m-%d %H:%M") if hasattr(dt, "strftime") else started
+        except Exception:
+            pass
     lines = [
-        "[PAPER]",
-        f"Vốn: {balance:.2f} USDT",
+        "📊 [PAPER] Status tổng",
+        f"Vốn hiện tại: {balance:.2f} USDT",
         f"Position: {pos_str}",
         f"Trạng thái: {status}",
-        f"Lệnh (từ khi bắt đầu): {n}",
-        f"Winrate: {winrate}%",
+        f"Tổng lệnh (từ khi bắt đầu): {n}",
         f"PNL tổng: {total_pnl:.2f} USDT",
+        f"%PNL: {pct_pnl}%",
         f"Ngày bắt đầu: {started}",
     ]
-    if d.get("paper_last_trade"):
-        lines.append(f"Lệnh gần nhất PnL: {d['paper_last_trade'].get('profit', 0):.2f}")
     return "\n".join(lines)
 
 
@@ -102,6 +110,80 @@ def _get_entry_close_keyboard():
             ]
         }
     return None
+
+
+def _get_trade_message_and_keyboard():
+    """
+    Nội dung khi /trade: thống kê % điều kiện LONG/SHORT, gợi ý, và 2 nút xác nhận (hoặc Đóng lệnh).
+    Trả về (text, keyboard).
+    """
+    from exchange.binance_client import BinanceClient
+    from strategy import add_indicators, evaluate_conditions
+    from bot import state
+
+    open_trade = state.get_paper_open_trade()
+    balance = state.get_paper_balance()
+    keyboard = _get_entry_close_keyboard()
+
+    if open_trade:
+        entry = float(open_trade.get("entry_price", 0))
+        side = open_trade.get("side", "")
+        try:
+            client = BinanceClient()
+            df_1m = client.get_klines_1m(settings.SYMBOL, limit=1)
+            price = float(df_1m["close"].iloc[-1]) if not df_1m.empty else entry
+        except Exception:
+            price = entry
+        size = float(open_trade.get("size", 0))
+        pnl = (price - entry) * size if side == "LONG" else (entry - price) * size
+        return (
+            f"[TẠO LỆNH / ĐÓNG LỆNH]\n\n📌 Đang có lệnh {side} @ {entry:.2f}\nGiá hiện tại: {price:.2f} → PnL: {pnl:+.2f} USDT\n\nChọn bên dưới để đóng lệnh:",
+            keyboard,
+        )
+
+    if not balance or balance <= 0:
+        return "[TẠO LỆNH]\nVốn = 0. Vào web Kích hoạt và nhập vốn ban đầu.", None
+
+    lines = ["[TẠO LỆNH]"]
+    try:
+        client = BinanceClient()
+        df_4h_raw = client.get_klines_4h(settings.SYMBOL, limit=100)
+        if df_4h_raw.empty or len(df_4h_raw) < 50:
+            lines.append("Chưa đủ dữ liệu nến 4h.")
+            lines.append("\nChọn Vào LONG hoặc Vào SHORT bên dưới, sau đó nhập % vốn (1-100).")
+            return "\n".join(lines), keyboard
+        df_4h = add_indicators(df_4h_raw)
+        if df_4h.empty or len(df_4h) < 2:
+            lines.append("Không tính được indicator.")
+            return "\n".join(lines), keyboard
+
+        prev_row = df_4h.iloc[-2]
+        row = df_4h.iloc[-1]
+        res = evaluate_conditions(prev_row, row)
+        long_pct = res["long_pct"]
+        short_pct = res["short_pct"]
+        risk_pct = res["risk_pct"]
+
+        lines.append(f"Trạng thái chiến lược hiện tại:")
+        lines.append(f"• LONG: đạt {long_pct}% điều kiện (cần ít nhất 33% = 1/3)")
+        lines.append(f"• SHORT: đạt {short_pct}% điều kiện (cần ít nhất 33% = 1/3)")
+        lines.append(f"• Rủi ro ước tính: {risk_pct}%")
+
+        if long_pct > short_pct and long_pct >= 33:
+            lines.append(f"\n💡 Gợi ý: LONG đạt {long_pct}% — có thể cân nhắc Vào LONG.")
+        elif short_pct > long_pct and short_pct >= 33:
+            lines.append(f"\n💡 Gợi ý: SHORT đạt {short_pct}% — có thể cân nhắc Vào SHORT.")
+        elif long_pct >= 33 and short_pct >= 33:
+            lines.append(f"\n💡 Gợi ý: Cả LONG và SHORT đều đạt điều kiện, chọn theo xu hướng.")
+        else:
+            lines.append(f"\n💡 Gợi ý: Chưa đủ điều kiện chiến lược (cần ≥33%). Có thể vẫn vào lệnh thủ công.")
+
+        lines.append("\n👉 Xác nhận vào lệnh: chọn nút LONG hoặc SHORT bên dưới, rồi nhập % vốn (1-100).")
+    except Exception as e:
+        lines.append(f"Lỗi: {e}")
+        lines.append("\nChọn Vào LONG hoặc Vào SHORT bên dưới, sau đó nhập % vốn (1-100).")
+
+    return "\n".join(lines), keyboard
 
 
 def _get_advise_text_and_keyboard(chat_id: str):
@@ -325,6 +407,9 @@ def _process_update(upd: dict, offset_ref: list):
         _reply(chat_id, "Bot đang chạy (chế độ paper trade).")
     elif text_lower == "/status":
         _reply(chat_id, _format_status())
+    elif text_lower == "/now":
+        from telegram.notifier import get_status_update_text
+        _reply(chat_id, get_status_update_text())
     elif text_lower == "/pnl":
         from bot import state
         trades = state.get_paper_trades()
@@ -341,11 +426,8 @@ def _process_update(upd: dict, offset_ref: list):
         advise_text, keyboard = _get_advise_text_and_keyboard(chat_id)
         _reply(chat_id, advise_text, reply_markup=keyboard)
     elif text_lower == "/trade":
-        keyb = _get_entry_close_keyboard()
-        if keyb:
-            _reply(chat_id, "Chọn hành động (vào lệnh hoặc đóng lệnh):", reply_markup=keyb)
-        else:
-            _reply(chat_id, "Vốn = 0. Vào web Kích hoạt và nhập vốn, sau đó dùng /trade hoặc /advise.")
+        msg, keyb = _get_trade_message_and_keyboard()
+        _reply(chat_id, msg, reply_markup=keyb)
 
 
 def run_telegram_commands(stop_event: threading.Event = None):

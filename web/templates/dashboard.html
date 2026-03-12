@@ -30,26 +30,37 @@
     /* Mảng 2 + 3: Content */
     .content { flex: 1; display: flex; min-height: 0; }
     /* Trái: Orders */
-    .orders-panel { flex: 0 0 320px; display: flex; flex-direction: column; background: #1e222d; border-right: 1px solid #2a2e39; overflow: hidden; }
-    .orders-panel h3 { margin: 0; padding: 10px 12px; font-size: 14px; border-bottom: 1px solid #2a2e39; }
-    .orders-table-wrap { flex: 1; overflow: auto; }
-    .orders-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .orders-table th { position: sticky; top: 0; background: #2a2e39; padding: 8px 6px; text-align: left; white-space: nowrap; }
-    .orders-table td { padding: 6px; border-bottom: 1px solid #2a2e39; }
+    .orders-panel { flex: 0 0 360px; display: flex; flex-direction: column; background: #1e222d; border-right: 1px solid #2a2e39; overflow: hidden; min-width: 0; }
+    .orders-panel h3 { margin: 0; padding: 10px 12px; font-size: 14px; border-bottom: 1px solid #2a2e39; flex-shrink: 0; }
+    .orders-table-wrap { flex: 1; overflow-x: auto; overflow-y: auto; min-height: 0; }
+    .orders-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; table-layout: auto; }
+    .orders-table th { position: sticky; top: 0; background: #2a2e39; padding: 6px 8px; text-align: left; white-space: nowrap; min-width: 1em; }
+    .orders-table td { padding: 6px 8px; border-bottom: 1px solid #2a2e39; white-space: nowrap; }
+    .orders-table th:nth-child(1), .orders-table td:nth-child(1) { min-width: 2.5em; }
+    .orders-table th:nth-child(2), .orders-table td:nth-child(2) { min-width: 5em; }
+    .orders-table th:nth-child(3), .orders-table td:nth-child(3) { min-width: 4em; }
+    .orders-table th:nth-child(4), .orders-table td:nth-child(4) { min-width: 8em; }
+    .orders-table th:nth-child(5), .orders-table td:nth-child(5) { min-width: 5em; }
+    .orders-table th:nth-child(6), .orders-table td:nth-child(6) { min-width: 8em; }
+    .orders-table th:nth-child(7), .orders-table td:nth-child(7) { min-width: 5em; }
+    .orders-table th:nth-child(8), .orders-table td:nth-child(8) { min-width: 5em; }
+    .orders-table th:nth-child(9), .orders-table td:nth-child(9) { min-width: 4em; }
+    .orders-table th:nth-child(10), .orders-table td:nth-child(10) { min-width: 5em; }
+    .orders-table th:nth-child(11), .orders-table td:nth-child(11) { min-width: 4.5em; }
     .orders-table tr.pnl-positive { background: rgba(38, 166, 154, 0.15); }
     .orders-table tr.pnl-negative { background: rgba(239, 83, 80, 0.15); }
     .orders-table tr.pnl-positive:hover { background: rgba(38, 166, 154, 0.25); }
     .orders-table tr.pnl-negative:hover { background: rgba(239, 83, 80, 0.25); }
     .orders-table .pnl-pos { color: #26a69a; }
     .orders-table .pnl-neg { color: #ef5350; }
-    /* Phải: Charts */
-    .charts-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .chart-price-wrap { flex: 0 0 66.666%; height: 0; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid #2a2e39; }
-    .chart-price-wrap .chart-title { padding: 4px 12px; font-size: 12px; color: #787b86; }
+    /* Phải: Charts 50:50 ngang */
+    .charts-panel { flex: 1; display: flex; flex-direction: row; min-width: 0; }
+    .chart-price-wrap { flex: 0 0 50%; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid #2a2e39; }
+    .chart-price-wrap .chart-title { padding: 4px 12px; font-size: 12px; color: #787b86; flex-shrink: 0; }
     #chartPrice { flex: 1; min-height: 200px; }
-    .chart-indicator-wrap { flex: 0 0 33.333%; min-height: 180px; display: flex; flex-direction: column; }
-    .chart-indicator-wrap .chart-title { padding: 4px 12px; font-size: 12px; color: #787b86; }
-    #chartIndicator { flex: 1; min-height: 120px; }
+    .chart-indicator-wrap { flex: 0 0 50%; display: flex; flex-direction: column; min-width: 0; }
+    .chart-indicator-wrap .chart-title { padding: 4px 12px; font-size: 12px; color: #787b86; flex-shrink: 0; }
+    #chartIndicator { flex: 1; min-height: 180px; }
   </style>
 </head>
 <body>
@@ -86,7 +97,7 @@
           <table class="orders-table">
             <thead>
               <tr>
-                <th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>PnL</th>
+                <th>ID</th><th>Symbol</th><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>Profit</th><th>% PnL</th><th>Cap After</th><th>Reason</th>
               </tr>
             </thead>
             <tbody id="ordersBody"></tbody>
@@ -96,7 +107,7 @@
 
       <main class="charts-panel">
         <div class="chart-price-wrap">
-          <div class="chart-title" id="chartPriceTitle">Giá —</div>
+          <div class="chart-title" id="chartPriceTitle">Giá + Volume (Binance)</div>
           <div id="chartPrice"></div>
         </div>
         <div class="chart-indicator-wrap">
@@ -111,7 +122,7 @@
 (function() {
   const INTERVAL_MS = 5000;
   let chartPrice = null, chartIndicator = null;
-  let seriesCandle = null, seriesEma = null;
+  let seriesCandle = null, seriesEma = null, seriesVolume = null;
   let seriesRsi = null, seriesEmaRsi = null, seriesWmaRsi = null;
   let currentTimeframe = '5m';
   let lastOrders = [];
@@ -155,15 +166,18 @@
     fetch('/api/orders').then(r => r.json()).then(data => {
       const orders = data.orders || [];
       lastOrders = orders;
-      ordersBody.innerHTML = orders.map(o => {
+      ordersBody.innerHTML = orders.map((o, idx) => {
         const pnl = o.pnl != null ? o.pnl : 0;
         const rowClass = pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
         const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
         const pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
-        return '<tr class="' + rowClass + '"><td>' + (o.side || '') + (o.is_open ? ' (mở)' : '') +
+        const pctPnl = o.pct_pnl != null ? ((o.pct_pnl >= 0 ? '+' : '') + o.pct_pnl.toFixed(2) + '%') : '—';
+        const capAfter = o.capital_after != null ? Number(o.capital_after).toFixed(2) : '—';
+        const id = o.is_open ? '•' : (o.id != null ? o.id : idx + 1);
+        return '<tr class="' + rowClass + '"><td>' + id + '</td><td>' + (o.symbol || '') + '</td><td>' + (o.side || '') + (o.is_open ? ' (mở)' : '') +
           '</td><td>' + formatDate(o.entry_time) + '</td><td>' + (o.entry_price != null ? Number(o.entry_price).toFixed(2) : '') +
           '</td><td>' + formatDate(o.exit_time) + '</td><td>' + (o.exit_price != null ? Number(o.exit_price).toFixed(2) : '') +
-          '</td><td class="' + pnlClass + '">' + pnlStr + '</td></tr>';
+          '</td><td class="' + pnlClass + '">' + pnlStr + '</td><td class="' + pnlClass + '">' + pctPnl + '</td><td>' + capAfter + '</td><td>' + (o.exit_reason || '—') + '</td></tr>';
       }).join('');
     }).catch(() => {});
   }
@@ -200,9 +214,15 @@
         chartPriceTitle.textContent = 'Giá ' + (data.symbol || '') + ' ' + interval;
         if (!ohlc.length) return;
         const candleData = ohlc.map(c => ({ time: toChartTime(c.time), open: c.open, high: c.high, low: c.low, close: c.close }));
+        const volumeData = ohlc.map(c => ({
+          time: toChartTime(c.time),
+          value: c.volume != null ? c.volume : 0,
+          color: c.close >= c.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)'
+        })).filter(x => x.time != null && x.value > 0);
         const ind = data.indicators || {};
         const times = ind.times || ohlc.map(c => c.time);
         if (seriesCandle) { seriesCandle.setData(candleData); seriesCandle.setMarkers(buildMarkers(lastOrders)); }
+        if (seriesVolume && volumeData.length) seriesVolume.setData(volumeData);
         if (seriesEma && ind.EMA && ind.EMA.length) {
           seriesEma.setData(times.map((t, i) => ({ time: toChartTime(t), value: ind.EMA[i] })).filter(x => x.time));
         }
@@ -228,17 +248,21 @@
   }
 
   function initCharts() {
+    const rightOffset = 18;
     const opts = {
       layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
       grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
       width: document.getElementById('chartPrice').clientWidth,
       height: document.getElementById('chartPrice').clientHeight,
-      timeScale: { timeVisible: true, secondsVisible: false, rightBarOffset: 0, lockVisibleTimeRangeOnResize: false },
-      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
+      timeScale: { timeVisible: true, secondsVisible: false, rightBarOffset: rightOffset, lockVisibleTimeRangeOnResize: false },
+      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.2 }, borderVisible: true },
     };
     chartPrice = LightweightCharts.createChart(document.getElementById('chartPrice'), opts);
     seriesCandle = chartPrice.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false });
+    seriesCandle.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.35 } });
     seriesEma = chartPrice.addLineSeries({ color: '#f2a900', lineWidth: 2 });
+    seriesVolume = chartPrice.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '' });
+    seriesVolume.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 }, borderVisible: false });
     chartPrice.timeScale().fitContent();
 
     const optsInd = {
@@ -246,7 +270,7 @@
       grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
       width: document.getElementById('chartIndicator').clientWidth,
       height: document.getElementById('chartIndicator').clientHeight,
-      timeScale: { timeVisible: true, rightBarOffset: 0, lockVisibleTimeRangeOnResize: false },
+      timeScale: { timeVisible: true, rightBarOffset: rightOffset, lockVisibleTimeRangeOnResize: false },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
     };
     chartIndicator = LightweightCharts.createChart(document.getElementById('chartIndicator'), optsInd);

@@ -131,6 +131,7 @@ def api_klines():
                 "high": round(float(row["high"]), 4),
                 "low": round(float(row["low"]), 4),
                 "close": round(float(row["close"]), 4),
+                "volume": round(float(row.get("volume", 0)), 0),
             })
         indicators = {
             "RSI": [round(float(row["RSI"]), 2) for _, row in df.iterrows()],
@@ -186,19 +187,29 @@ def api_orders():
                 "exit_time": None,
                 "exit_price": None,
                 "pnl": round(pnl, 2),
+                "pct_pnl": None,
+                "capital_after": None,
                 "is_open": True,
                 "symbol": settings.SYMBOL,
+                "exit_reason": None,
             })
-        for t in reversed(trades):
+        for i, t in enumerate(reversed(trades)):
             profit = float(t.get("profit", 0))
+            cap_before = float(t.get("capital_before") or 0)
+            cap_after = t.get("capital_after")
+            if cap_after is not None:
+                cap_after = round(float(cap_after), 2)
+            pct_pnl = round((profit / cap_before * 100), 2) if cap_before else 0
             orders.append({
-                "id": len(orders),
+                "id": len(orders) + 1,
                 "side": str(t.get("side", "")).upper(),
                 "entry_time": t.get("entry_time"),
                 "entry_price": t.get("entry_price"),
                 "exit_time": t.get("exit_time"),
                 "exit_price": t.get("exit_price"),
                 "pnl": round(profit, 2),
+                "pct_pnl": pct_pnl,
+                "capital_after": cap_after,
                 "is_open": False,
                 "symbol": settings.SYMBOL,
                 "exit_reason": t.get("exit_reason"),
