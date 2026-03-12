@@ -15,7 +15,8 @@ BOT_COMMANDS = [
     ("ping", "Kiểm tra bot đang chạy"),
     ("status", "Xem trạng thái: vốn, position, PnL, winrate"),
     ("pnl", "Xem PnL tổng (paper)"),
-    ("advise", "Tư vấn tín hiệu / thử vào hoặc đóng lệnh"),
+    ("advise", "Tư vấn tín hiệu + nút vào/đóng lệnh"),
+    ("trade", "Vào lệnh ngay hoặc đóng lệnh (nút bấm)"),
     ("stop", "Dừng paper trade"),
 ]
 
@@ -84,6 +85,25 @@ def _format_status():
     return "\n".join(lines)
 
 
+def _get_entry_close_keyboard():
+    """Trả về inline keyboard: Vào LONG/SHORT (nếu chưa có lệnh) hoặc Đóng lệnh (nếu đang có lệnh)."""
+    from bot import state
+    open_trade = state.get_paper_open_trade()
+    balance = state.get_paper_balance()
+    if open_trade:
+        return {"inline_keyboard": [[{"text": "Đóng lệnh", "callback_data": "close_position"}]]}
+    if balance and balance > 0:
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "Vào LONG", "callback_data": "entry_long"},
+                    {"text": "Vào SHORT", "callback_data": "entry_short"},
+                ]
+            ]
+        }
+    return None
+
+
 def _get_advise_text_and_keyboard(chat_id: str):
     """Lấy nội dung tư vấn + inline keyboard (Vào LONG/SHORT hoặc Đóng lệnh)."""
     from exchange.binance_client import BinanceClient
@@ -94,7 +114,7 @@ def _get_advise_text_and_keyboard(chat_id: str):
     balance = state.get_paper_balance()
 
     lines = ["[TƯ VẤN TÍN HIỆU]"]
-    keyboard = None
+    keyboard = _get_entry_close_keyboard()
 
     try:
         client = BinanceClient()
@@ -111,13 +131,13 @@ def _get_advise_text_and_keyboard(chat_id: str):
         row = df_4h.iloc[-1]
         res = evaluate_conditions(prev_row, row)
 
-        lines.append(f"LONG: {res['long_pct']}% điều kiện đạt (cần 1/3)")
+        lines.append(f"LONG: {res['long_pct']}% đạt (1/3)")
         for name, met in res["long_conditions"]:
             lines.append(f"  • {name}: {'✅' if met else '❌'}")
-        lines.append(f"SHORT: {res['short_pct']}% điều kiện đạt (cần 1/3)")
+        lines.append(f"SHORT: {res['short_pct']}% đạt (1/3)")
         for name, met in res["short_conditions"]:
             lines.append(f"  • {name}: {'✅' if met else '❌'}")
-        lines.append(f"Ước tính rủi ro: {res['risk_pct']}% (ATR-based)")
+        lines.append(f"Rủi ro ước tính: {res['risk_pct']}%")
 
         if open_trade:
             entry = float(open_trade.get("entry_price", 0))
@@ -130,23 +150,13 @@ def _get_advise_text_and_keyboard(chat_id: str):
             else:
                 pnl = (entry - price) * size
             lines.append("")
-            lines.append(f"📌 Đang có lệnh {side} @ {entry:.2f}")
-            lines.append(f"Giá hiện tại: {price:.2f} → PnL: {pnl:+.2f} USDT")
-            keyboard = {"inline_keyboard": [[{"text": "Đóng lệnh", "callback_data": "close_position"}]]}
+            lines.append(f"📌 Lệnh {side} @ {entry:.2f} | Giá: {price:.2f} | PnL: {pnl:+.2f} USDT")
         else:
             if balance and balance > 0:
                 lines.append("")
-                lines.append("Bạn có thể thử vào lệnh (paper): chọn LONG hoặc SHORT bên dưới, sau đó nhập % vốn (1-100).")
-                keyboard = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "Vào LONG", "callback_data": "entry_long"},
-                            {"text": "Vào SHORT", "callback_data": "entry_short"},
-                        ]
-                    ]
-                }
+                lines.append("👉 Chọn Vào LONG / Vào SHORT bên dưới, rồi nhập % vốn (1-100).")
             else:
-                lines.append("Vốn = 0. Vào web Kích hoạt và nhập vốn ban đầu.")
+                lines.append("Vốn = 0. Vào web Kích hoạt và nhập vốn.")
     except Exception as e:
         lines.append(f"Lỗi: {e}")
 
@@ -330,6 +340,12 @@ def _process_update(upd: dict, offset_ref: list):
     elif text_lower == "/advise":
         advise_text, keyboard = _get_advise_text_and_keyboard(chat_id)
         _reply(chat_id, advise_text, reply_markup=keyboard)
+    elif text_lower == "/trade":
+        keyb = _get_entry_close_keyboard()
+        if keyb:
+            _reply(chat_id, "Chọn hành động (vào lệnh hoặc đóng lệnh):", reply_markup=keyb)
+        else:
+            _reply(chat_id, "Vốn = 0. Vào web Kích hoạt và nhập vốn, sau đó dùng /trade hoặc /advise.")
 
 
 def run_telegram_commands(stop_event: threading.Event = None):

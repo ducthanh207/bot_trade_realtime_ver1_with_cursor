@@ -134,6 +134,8 @@ def api_klines():
             })
         indicators = {
             "RSI": [round(float(row["RSI"]), 2) for _, row in df.iterrows()],
+            "EMA_RSI": [round(float(row["EMA_RSI"]), 2) for _, row in df.iterrows()],
+            "WMA_RSI": [round(float(row["WMA_RSI"]), 2) for _, row in df.iterrows()],
             "ATR": [round(float(row["ATR"]), 4) for _, row in df.iterrows()],
             "EMA": [round(float(row["EMA"]), 4) for _, row in df.iterrows()],
             "WMA": [round(float(row["WMA"]), 4) for _, row in df.iterrows()],

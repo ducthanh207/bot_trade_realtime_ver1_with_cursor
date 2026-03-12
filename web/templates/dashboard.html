@@ -100,7 +100,7 @@
           <div id="chartPrice"></div>
         </div>
         <div class="chart-indicator-wrap">
-          <div class="chart-title">Chỉ báo RSI (0-100) & ATR</div>
+          <div class="chart-title">Chỉ báo: RSI, EMA_RSI, WMA_RSI (0–100) — giá trị bên phải</div>
           <div id="chartIndicator"></div>
         </div>
       </main>
@@ -112,10 +112,12 @@
   const INTERVAL_MS = 5000;
   let chartPrice = null, chartIndicator = null;
   let seriesCandle = null, seriesEma = null;
-  let seriesRsi = null, seriesAtr = null;
+  let seriesRsi = null, seriesEmaRsi = null, seriesWmaRsi = null;
   let currentTimeframe = '5m';
   let lastOrders = [];
   let lastKlines = { ohlc: [], indicators: {} };
+  let userHasZoomedOrPanned = false;
+  let lastVisibleRange = null;
 
   const capitalInput = document.getElementById('initial_capital');
   const statusBadge = document.getElementById('statusBadge');
@@ -183,9 +185,13 @@
     return markers;
   }
 
-  function fetchKlines() {
+  function fetchKlines(forceFitContent) {
     const interval = timeframeSelect.value;
+    const timeframeChanged = interval !== currentTimeframe;
     currentTimeframe = interval;
+    if (chartPrice && userHasZoomedOrPanned && !forceFitContent && !timeframeChanged) {
+      try { lastVisibleRange = chartPrice.timeScale().getVisibleRange(); } catch (e) { lastVisibleRange = null; }
+    }
     fetch('/api/klines?interval=' + encodeURIComponent(interval) + '&limit=500')
       .then(r => r.json())
       .then(data => {
@@ -202,31 +208,60 @@
         }
         if (chartIndicator && ind.RSI && ind.RSI.length) {
           const rsiData = times.map((t, i) => ({ time: toChartTime(t), value: ind.RSI[i] })).filter(x => x.time != null);
-          const atrData = times.map((t, i) => ({ time: toChartTime(t), value: ind.ATR[i] })).filter(x => x.time != null);
+          const emaRsiData = (ind.EMA_RSI || []).length ? times.map((t, i) => ({ time: toChartTime(t), value: ind.EMA_RSI[i] })).filter(x => x.time != null) : [];
+          const wmaRsiData = (ind.WMA_RSI || []).length ? times.map((t, i) => ({ time: toChartTime(t), value: ind.WMA_RSI[i] })).filter(x => x.time != null) : [];
           if (seriesRsi) seriesRsi.setData(rsiData);
-          if (seriesAtr) seriesAtr.setData(atrData);
+          if (seriesEmaRsi && emaRsiData.length) seriesEmaRsi.setData(emaRsiData);
+          if (seriesWmaRsi && wmaRsiData.length) seriesWmaRsi.setData(wmaRsiData);
+        }
+        if (chartPrice && (forceFitContent || timeframeChanged)) {
+          chartPrice.timeScale().fitContent();
+          if (chartIndicator) chartIndicator.timeScale().fitContent();
+          userHasZoomedOrPanned = false;
+        } else if (chartPrice && lastVisibleRange && lastVisibleRange.from != null && lastVisibleRange.to != null) {
+          try {
+            chartPrice.timeScale().setVisibleRange(lastVisibleRange);
+            if (chartIndicator) chartIndicator.timeScale().setVisibleRange(lastVisibleRange);
+          } catch (e) {}
         }
       }).catch(() => {});
   }
 
   function initCharts() {
-    const opts = { layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' }, grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } }, width: document.getElementById('chartPrice').clientWidth, height: document.getElementById('chartPrice').clientHeight, timeScale: { timeVisible: true, secondsVisible: false } };
+    const opts = {
+      layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
+      grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
+      width: document.getElementById('chartPrice').clientWidth,
+      height: document.getElementById('chartPrice').clientHeight,
+      timeScale: { timeVisible: true, secondsVisible: false, rightBarOffset: 0, lockVisibleTimeRangeOnResize: false },
+      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
+    };
     chartPrice = LightweightCharts.createChart(document.getElementById('chartPrice'), opts);
     seriesCandle = chartPrice.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false });
     seriesEma = chartPrice.addLineSeries({ color: '#f2a900', lineWidth: 2 });
     chartPrice.timeScale().fitContent();
 
-    const optsInd = { layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' }, grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } }, width: document.getElementById('chartIndicator').clientWidth, height: document.getElementById('chartIndicator').clientHeight };
+    const optsInd = {
+      layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
+      grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
+      width: document.getElementById('chartIndicator').clientWidth,
+      height: document.getElementById('chartIndicator').clientHeight,
+      timeScale: { timeVisible: true, rightBarOffset: 0, lockVisibleTimeRangeOnResize: false },
+      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
+    };
     chartIndicator = LightweightCharts.createChart(document.getElementById('chartIndicator'), optsInd);
-    seriesRsi = chartIndicator.addLineSeries({ color: '#9c27b0', lineWidth: 2 });
-    seriesAtr = chartIndicator.addLineSeries({ color: '#ff9800', lineWidth: 1 });
+    seriesRsi = chartIndicator.addLineSeries({ color: '#e0e0e0', lineWidth: 2 });
+    seriesEmaRsi = chartIndicator.addLineSeries({ color: '#26a69a', lineWidth: 2 });
+    seriesWmaRsi = chartIndicator.addLineSeries({ color: '#ef5350', lineWidth: 2 });
     chartIndicator.timeScale().fitContent();
 
     chartPrice.timeScale().subscribeVisibleTimeRangeChange(() => {
+      userHasZoomedOrPanned = true;
       const range = chartPrice.timeScale().getVisibleRange();
       if (range && chartIndicator) chartIndicator.timeScale().setVisibleRange(range);
     });
     chartIndicator.timeScale().subscribeVisibleTimeRangeChange(() => {
+      userHasZoomedOrPanned = true;
       const range = chartIndicator.timeScale().getVisibleRange();
       if (range && chartPrice) chartPrice.timeScale().setVisibleRange(range);
     });
@@ -256,7 +291,7 @@
   document.getElementById('btnStop').addEventListener('click', () => {
     fetch('/api/paper/stop', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
   });
-  timeframeSelect.addEventListener('change', () => { fetchKlines(); });
+  timeframeSelect.addEventListener('change', () => { fetchKlines(true); });
 
   window.addEventListener('resize', resizeCharts);
   refresh();
@@ -264,7 +299,7 @@
   setInterval(refresh, INTERVAL_MS);
   setInterval(fetchOrders, INTERVAL_MS);
   setInterval(fetchKlines, INTERVAL_MS);
-  setTimeout(() => { initCharts(); fetchKlines(); resizeCharts(); }, 100);
+  setTimeout(() => { initCharts(); fetchKlines(true); resizeCharts(); }, 100);
 })();
   </script>
 </body>
