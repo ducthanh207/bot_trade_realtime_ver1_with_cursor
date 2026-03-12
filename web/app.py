@@ -122,6 +122,22 @@ def api_paper_start():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/paper/clear-history", methods=["POST"])
+def api_paper_clear_history():
+    """Xóa toàn bộ lịch sử lệnh (UI + state), reset về trạng thái ban đầu. Dữ liệu đã xuất CSV vẫn giữ ở file đã tải."""
+    try:
+        from bot import state
+        state.paper_clear_history()
+        try:
+            from bot.paper_persistence import save_paper_state
+            save_paper_state()
+        except Exception:
+            pass
+        return jsonify({"ok": True, "message": "Đã xóa toàn bộ lịch sử lệnh."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/paper/pause", methods=["POST"])
 def api_paper_pause():
     try:

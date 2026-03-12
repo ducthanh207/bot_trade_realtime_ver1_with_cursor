@@ -189,16 +189,29 @@ def set_paper_wallet_pct(value: float or None):
 
 
 def paper_start(initial_capital: float):
-    """Gọi khi bấm Kích hoạt: set vốn, ngày bắt đầu, status running, xóa lịch sử."""
+    """Gọi khi bấm Kích hoạt: chỉ start/resume bot, không xóa lịch sử lệnh."""
     global _paper_initial_capital, _paper_balance, _paper_started_at, _paper_status
-    global _paper_open_trade, _paper_trades, _paper_last_trade
-    _paper_initial_capital = float(initial_capital)
-    _paper_balance = float(initial_capital)
-    _paper_started_at = datetime.now(_tz_app)
-    _paper_status = "running"
+    global _paper_open_trade
     _paper_open_trade = None
+    _paper_status = "running"
+    if _paper_started_at is None:
+        _paper_initial_capital = float(initial_capital)
+        _paper_balance = float(initial_capital)
+        _paper_started_at = datetime.now(_tz_app)
+    else:
+        _paper_initial_capital = float(initial_capital) if initial_capital and initial_capital > 0 else _paper_initial_capital
+
+
+def paper_clear_history():
+    """Gọi khi bấm Xóa toàn bộ: xóa toàn bộ lịch sử lệnh, reset về trạng thái ban đầu."""
+    global _paper_trades, _paper_last_trade, _paper_open_trade
+    global _paper_initial_capital, _paper_balance, _paper_started_at, _paper_status
     _paper_trades = []
     _paper_last_trade = None
+    _paper_open_trade = None
+    _paper_started_at = None
+    _paper_status = "stopped"
+    _paper_balance = _paper_initial_capital if _paper_initial_capital else 0
 
 
 def paper_pause():

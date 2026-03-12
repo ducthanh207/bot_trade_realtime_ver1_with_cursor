@@ -21,6 +21,7 @@
     .overview button.start { background: #26a69a; color: #fff; }
     .overview button.pause { background: #f2a900; color: #000; }
     .overview button.stop { background: #ef5350; color: #fff; }
+    .overview button.btn-clear { background: #78909c; color: #fff; }
     .overview button:disabled { opacity: 0.5; cursor: not-allowed; }
     .status-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-weight: 600; font-size: 12px; }
     .status-running { background: #26a69a; color: #fff; }
@@ -83,6 +84,7 @@
       <button class="start" id="btnStart">Kích hoạt</button>
       <button class="pause" id="btnPause">Tạm dừng</button>
       <button class="stop" id="btnStop">Dừng</button>
+      <button type="button" class="btn-clear" id="btnClearHistory">Xóa toàn bộ</button>
       <span class="status-badge status-stopped" id="statusBadge">stopped</span>
       <span class="stat" id="statStarted">Bắt đầu: —</span>
       <label>Khung thời gian</label>
@@ -395,6 +397,13 @@
 
   document.getElementById('btnStop').addEventListener('click', () => {
     fetch('/api/paper/stop', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
+  });
+  document.getElementById('btnClearHistory').addEventListener('click', () => {
+    if (!confirm('Xóa toàn bộ lịch sử lệnh? Vốn và trạng thái sẽ reset. Bạn có chắc?')) return;
+    fetch('/api/paper/clear-history', { method: 'POST' }).then(r => r.json()).then(d => {
+      if (d.ok) { refresh(); alert(d.message || 'Đã xóa toàn bộ lịch sử lệnh.'); }
+      else alert(d.error || 'Lỗi');
+    }).catch(() => alert('Lỗi kết nối'));
   });
   document.getElementById('btnCapitalRules').addEventListener('click', () => {
     var lev = parseFloat(document.getElementById('inputLeverage').value);
