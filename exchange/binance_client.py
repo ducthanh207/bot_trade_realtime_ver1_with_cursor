@@ -62,25 +62,37 @@ class BinanceClient:
             return []
 
     def get_klines_4h(self, symbol: str = None, limit: int = 500) -> pd.DataFrame:
-        symbol = symbol or settings.SYMBOL
-        if self._has_key:
-            client = self._get_client()
-            if client:
-                from binance.client import Client
-                klines = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_4HOUR, limit=limit)
-                return self._klines_to_df(klines)
-        klines = self._fetch_klines_public(symbol, "4h", limit)
-        return self._klines_to_df(klines)
+        return self.get_klines(symbol, "4h", limit)
 
     def get_klines_1m(self, symbol: str = None, limit: int = 1000) -> pd.DataFrame:
+        return self.get_klines(symbol, "1m", limit)
+
+    def get_klines(self, symbol: str = None, interval: str = "5m", limit: int = 500) -> pd.DataFrame:
+        """Lấy klines theo interval: 1m, 5m, 15m, 1h, 4h, 1d, 3d."""
         symbol = symbol or settings.SYMBOL
+        interval = (interval or "5m").strip().lower()
+        if interval not in ("1m", "5m", "15m", "1h", "4h", "1d", "3d"):
+            interval = "5m"
         if self._has_key:
             client = self._get_client()
             if client:
                 from binance.client import Client
-                klines = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1MINUTE, limit=limit)
+                interval_map = {
+                    "1m": Client.KLINE_INTERVAL_1MINUTE,
+                    "5m": Client.KLINE_INTERVAL_5MINUTE,
+                    "15m": Client.KLINE_INTERVAL_15MINUTE,
+                    "1h": Client.KLINE_INTERVAL_1HOUR,
+                    "4h": Client.KLINE_INTERVAL_4HOUR,
+                    "1d": Client.KLINE_INTERVAL_1DAY,
+                    "3d": Client.KLINE_INTERVAL_3DAY,
+                }
+                klines = client.futures_klines(
+                    symbol=symbol,
+                    interval=interval_map.get(interval, Client.KLINE_INTERVAL_5MINUTE),
+                    limit=limit,
+                )
                 return self._klines_to_df(klines)
-        klines = self._fetch_klines_public(symbol, "1m", limit)
+        klines = self._fetch_klines_public(symbol, interval, limit)
         return self._klines_to_df(klines)
 
     def get_balance(self) -> float:

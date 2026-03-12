@@ -8,10 +8,11 @@ _root = Path(__file__).resolve().parents[1]
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template
 from datetime import datetime
 
-app = Flask(__name__)
+_web_dir = Path(__file__).resolve().parent
+app = Flask(__name__, template_folder=str(_web_dir / "templates"))
 
 
 def _serialize(obj):
@@ -44,7 +45,7 @@ def get_status():
 
 @app.route("/")
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template("dashboard.html")
 
 
 @app.route("/api/status")
@@ -86,152 +87,123 @@ def api_paper_stop():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Paper Trade – ATR Strategy</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; margin: 12px; background: #f5f5f5; }
-    .container { max-width: 1200px; margin: 0 auto; }
-    h1 { color: #333; margin-bottom: 8px; }
-    .panel { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    .row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 12px; }
-    label { font-weight: 600; margin-right: 8px; }
-    input[type="number"] { width: 120px; padding: 6px 8px; }
-    .info { color: #666; font-size: 0.95em; }
-    button { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
-    button.start { background: #28a745; color: #fff; }
-    button.pause { background: #ffc107; color: #000; }
-    button.stop { background: #dc3545; color: #fff; }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    th { background: #eee; }
-    tr.profit { background: #d4edda; }
-    tr.loss { background: #f8d7da; }
-    .stats { font-size: 14px; margin-bottom: 12px; padding: 10px; background: #e8f4fd; border-radius: 6px; }
-    .status-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-weight: 600; }
-    .status-running { background: #28a745; color: #fff; }
-    .status-paused { background: #ffc107; color: #000; }
-    .status-stopped { background: #6c757d; color: #fff; }
-    #refresh-msg { color: #666; font-size: 12px; margin-left: 12px; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>Paper Trade – Chiến lược ATR</h1>
-    <p class="info">Vốn ảo, giá thật từ Binance. Kích hoạt để bắt đầu tính từ hôm nay.</p>
+def _get_client():
+    from exchange.binance_client import BinanceClient
+    return BinanceClient()
 
-    <div class="panel">
-      <div class="row">
-        <label for="initial_capital">Số vốn ban đầu (USDT):</label>
-        <input type="number" id="initial_capital" value="1000" min="1" step="1">
-        <span class="info">Ngày bắt đầu:</span>
-        <span id="paper_started_at">—</span>
-        <span id="refresh-msg">Tự động cập nhật 10s</span>
-      </div>
-      <div class="row">
-        <button class="start" id="btnStart">Kích hoạt</button>
-        <button class="pause" id="btnPause">Tạm dừng</button>
-        <button class="stop" id="btnStop">Dừng</button>
-        <span class="status-badge status-stopped" id="statusBadge">stopped</span>
-      </div>
-    </div>
 
-    <div class="panel">
-      <div class="stats" id="stats">
-        Tổng số lệnh: 0 | LONG: 0 | SHORT: 0 | Winrate: 0.00% | PNL tổng: 0.00 USDT | Vốn hiện tại: 0.00 USDT
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th><th>Symbol</th><th>Side</th><th>Entry Time</th><th>Entry Price</th>
-            <th>Exit Time</th><th>Exit Price</th><th>Profit</th><th>% PnL</th><th>Cap After</th><th>Reason</th>
-          </tr>
-        </thead>
-        <tbody id="tradesBody"></tbody>
-      </table>
-    </div>
-  </div>
+@app.route("/api/price")
+def api_price():
+    """Giá đóng cửa mới nhất (để tính unrealized PnL)."""
+    try:
+        from config import settings
+        client = _get_client()
+        df = client.get_klines(settings.SYMBOL, "1m", 1)
+        if df.empty:
+            return jsonify({"price": 0.0})
+        price = float(df["close"].iloc[-1])
+        return jsonify({"price": price, "symbol": settings.SYMBOL})
+    except Exception as e:
+        return jsonify({"price": 0.0, "error": str(e)})
 
-  <script>
-    const capitalInput = document.getElementById('initial_capital');
-    const paperStartedAt = document.getElementById('paper_started_at');
-    const statusBadge = document.getElementById('statusBadge');
-    const statsEl = document.getElementById('stats');
-    const tradesBody = document.getElementById('tradesBody');
-    const btnStart = document.getElementById('btnStart');
-    const btnPause = document.getElementById('btnPause');
-    const btnStop = document.getElementById('btnStop');
 
-    function setStatusBadge(s) {
-      statusBadge.textContent = s;
-      statusBadge.className = 'status-badge ';
-      if (s === 'running') statusBadge.classList.add('status-running');
-      else if (s === 'paused') statusBadge.classList.add('status-paused');
-      else statusBadge.classList.add('status-stopped');
-    }
+@app.route("/api/klines")
+def api_klines():
+    """Klines + indicators theo interval. interval: 1m, 5m, 15m, 1h, 4h, 1d, 3d."""
+    try:
+        from config import settings
+        from strategy.indicators import add_indicators
+        interval = request.args.get("interval", "5m").strip().lower()
+        limit = min(int(request.args.get("limit", 500)), 1000)
+        if interval not in ("1m", "5m", "15m", "1h", "4h", "1d", "3d"):
+            interval = "5m"
+        client = _get_client()
+        df = client.get_klines(settings.SYMBOL, interval, limit)
+        if df.empty:
+            return jsonify({"ohlc": [], "indicators": {}, "interval": interval})
+        df = add_indicators(df)
+        ohlc = []
+        for ts, row in df.iterrows():
+            t = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+            ohlc.append({
+                "time": t,
+                "open": round(float(row["open"]), 4),
+                "high": round(float(row["high"]), 4),
+                "low": round(float(row["low"]), 4),
+                "close": round(float(row["close"]), 4),
+            })
+        indicators = {
+            "RSI": [round(float(row["RSI"]), 2) for _, row in df.iterrows()],
+            "ATR": [round(float(row["ATR"]), 4) for _, row in df.iterrows()],
+            "EMA": [round(float(row["EMA"]), 4) for _, row in df.iterrows()],
+            "WMA": [round(float(row["WMA"]), 4) for _, row in df.iterrows()],
+            "times": [ts.isoformat() if hasattr(ts, "isoformat") else str(ts) for ts in df.index],
+        }
+        return jsonify({"ohlc": ohlc, "indicators": indicators, "interval": interval, "symbol": settings.SYMBOL})
+    except Exception as e:
+        return jsonify({"ohlc": [], "indicators": {}, "error": str(e)})
 
-    function formatDate(x) {
-      if (!x) return '—';
-      try { return new Date(x).toLocaleString('vi-VN'); } catch(e) { return x; }
-    }
 
-    function refresh() {
-      fetch('/api/status')
-        .then(r => r.json())
-        .then(d => {
-          paperStartedAt.textContent = d.paper_started_at ? formatDate(d.paper_started_at) : '—';
-          setStatusBadge(d.paper_status || 'stopped');
-
-          const n = d.paper_trades_count || 0;
-          const longCt = d.paper_long_count || 0;
-          const shortCt = d.paper_short_count || 0;
-          const winrate = d.paper_winrate != null ? d.paper_winrate : 0;
-          const totalPnl = d.paper_total_pnl != null ? d.paper_total_pnl : 0;
-          const balance = d.paper_balance != null ? d.paper_balance : 0;
-          statsEl.textContent = 'Tổng số lệnh: ' + n + ' | LONG: ' + longCt + ' | SHORT: ' + shortCt +
-            ' | Winrate: ' + winrate + '% | PNL tổng: ' + totalPnl.toFixed(2) + ' USDT | Vốn hiện tại: ' + balance.toFixed(2) + ' USDT';
-
-          const trades = d.paper_trades || [];
-          tradesBody.innerHTML = trades.map((t, i) => {
-            const profit = parseFloat(t.profit) || 0;
-            const capBefore = parseFloat(t.capital_before) || 1;
-            const pct = capBefore ? (profit / capBefore * 100).toFixed(2) : '0.00';
-            const rowClass = profit >= 0 ? 'profit' : 'loss';
-            return '<tr class="' + rowClass + '"><td>' + (i+1) + '</td><td>BTCUSDT</td><td>' + (t.side || '') +
-              '</td><td>' + formatDate(t.entry_time) + '</td><td>' + (t.entry_price != null ? parseFloat(t.entry_price).toFixed(2) : '') +
-              '</td><td>' + formatDate(t.exit_time) + '</td><td>' + (t.exit_price != null ? parseFloat(t.exit_price).toFixed(2) : '') +
-              '</td><td>' + profit.toFixed(2) + '</td><td>' + (profit >= 0 ? '+' : '') + pct + '%</td>' +
-              '<td>' + (t.capital_after != null ? parseFloat(t.capital_after).toFixed(2) : '') + '</td><td>' + (t.exit_reason || '') + '</td></tr>';
-          }).join('');
-        })
-        .catch(() => {});
-    }
-
-    btnStart.addEventListener('click', () => {
-      const cap = parseFloat(capitalInput.value);
-      if (!(cap > 0)) { alert('Nhập số vốn > 0'); return; }
-      fetch('/api/paper/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initial_capital: cap }) })
-        .then(r => r.json()).then(d => { if (d.ok) refresh(); else alert(d.error || 'Lỗi'); });
-    });
-    btnPause.addEventListener('click', () => {
-      fetch('/api/paper/pause', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
-    });
-    btnStop.addEventListener('click', () => {
-      fetch('/api/paper/stop', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
-    });
-
-    refresh();
-    setInterval(refresh, 10000);
-  </script>
-</body>
-</html>
-"""
+@app.route("/api/orders")
+def api_orders():
+    """Danh sách lệnh (mở + đã đóng), mới nhất lên đầu; mỗi lệnh có pnl (realized hoặc unrealized)."""
+    try:
+        from bot import state
+        from config import settings
+        status = get_status()
+        if status.get("error"):
+            return jsonify({"orders": [], "error": status["error"]})
+        open_trade = status.get("paper_open_trade")
+        trades = list(status.get("paper_trades") or [])
+        current_price = None
+        if open_trade:
+            try:
+                client = _get_client()
+                df = client.get_klines(settings.SYMBOL, "1m", 1)
+                if not df.empty:
+                    current_price = float(df["close"].iloc[-1])
+            except Exception:
+                pass
+        orders = []
+        if open_trade:
+            entry = float(open_trade.get("entry_price") or 0)
+            side = str(open_trade.get("side", "")).upper()
+            size = float(open_trade.get("size") or 0)
+            if current_price and entry and size:
+                if side == "LONG":
+                    pnl = (current_price - entry) * size
+                else:
+                    pnl = (entry - current_price) * size
+            else:
+                pnl = 0.0
+            orders.append({
+                "id": "open",
+                "side": side,
+                "entry_time": open_trade.get("entry_time"),
+                "entry_price": entry,
+                "exit_time": None,
+                "exit_price": None,
+                "pnl": round(pnl, 2),
+                "is_open": True,
+                "symbol": settings.SYMBOL,
+            })
+        for t in reversed(trades):
+            profit = float(t.get("profit", 0))
+            orders.append({
+                "id": len(orders),
+                "side": str(t.get("side", "")).upper(),
+                "entry_time": t.get("entry_time"),
+                "entry_price": t.get("entry_price"),
+                "exit_time": t.get("exit_time"),
+                "exit_price": t.get("exit_price"),
+                "pnl": round(profit, 2),
+                "is_open": False,
+                "symbol": settings.SYMBOL,
+                "exit_reason": t.get("exit_reason"),
+            })
+        return jsonify({"orders": orders})
+    except Exception as e:
+        return jsonify({"orders": [], "error": str(e)})
 
 
 def run_web(host=None, port=None):

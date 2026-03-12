@@ -3,6 +3,7 @@
 Vòng lặp paper trade: dùng giá thật từ Binance (klines), logic giống live_loop
 nhưng chỉ cập nhật paper_balance / paper_open_trade / paper_trades, không gọi đặt lệnh thật.
 Chỉ chạy khi paper_status == "running"; khi "paused" vẫn xử lý thoát lệnh, không mở mới.
+Khi bắt đầu: warm-up lấy đủ nến cũ để tính indicator và ra quyết định ngay từ vòng lặp đầu.
 """
 
 import time
@@ -27,21 +28,64 @@ from strategy import (
 import bot.state as state
 
 
+# Số nến tối thiểu để add_indicators không drop hết (RSI 14, WMA 45, ATR 14, EMA 20)
+MIN_KLINES_4H = 80
+MIN_KLINES_1M = 80
+WARMUP_RETRIES = 5
+WARMUP_SLEEP_SEC = 2
+
+
 def _ensure_series(row):
     if isinstance(row, pd.DataFrame):
         return row.iloc[0]
     return row
 
 
+def warm_up_klines(client: BinanceClient, symbol: str, notify_func=None) -> bool:
+    """
+    Lấy đủ nến cũ 4h + 1m để tính indicator ngay từ vòng lặp đầu.
+    Trả về True nếu có đủ dữ liệu (sau add_indicators còn >= 2 hàng 4h).
+    """
+    for attempt in range(1, WARMUP_RETRIES + 1):
+        try:
+            if not client.is_connected():
+                if notify_func:
+                    notify_func("[PAPER] Warm-up: không kết nối Binance.")
+                time.sleep(WARMUP_SLEEP_SEC)
+                continue
+            df_4h_raw = client.get_klines_4h(symbol, limit=150)
+            df_1m_raw = client.get_klines_1m(symbol, limit=150)
+            if df_4h_raw.empty or len(df_4h_raw) < MIN_KLINES_4H:
+                if notify_func:
+                    notify_func(f"[PAPER] Warm-up: chưa đủ nến 4h (cần >= {MIN_KLINES_4H}), thử lần {attempt}/{WARMUP_RETRIES}.")
+                time.sleep(WARMUP_SLEEP_SEC)
+                continue
+            df_4h = add_indicators(df_4h_raw)
+            if df_4h.empty or len(df_4h) < 2:
+                if notify_func:
+                    notify_func(f"[PAPER] Warm-up: sau khi tính indicator không đủ dữ liệu, thử lần {attempt}/{WARMUP_RETRIES}.")
+                time.sleep(WARMUP_SLEEP_SEC)
+                continue
+            if notify_func:
+                notify_func("[PAPER] Warm-up OK: đã có đủ nến 4h/1m để tính indicator, bắt đầu vòng lặp.")
+            return True
+        except Exception as e:
+            if notify_func:
+                notify_func(f"[PAPER] Warm-up lỗi (lần {attempt}/{WARMUP_RETRIES}): {e}")
+            time.sleep(WARMUP_SLEEP_SEC)
+    return False
+
+
 def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
     """
-    Vòng lặp vô hạn: lấy 4h/1m từ Binance, chạy logic entry/exit,
+    Vòng lặp vô hạn: warm-up dữ liệu, rồi lấy 4h/1m từ Binance, chạy logic entry/exit,
     cập nhật paper state; không gọi place_market_order/close_position.
     """
     state.set_bot_started_at()
-    last_status_min = None
     symbol = settings.SYMBOL
+    warm_up_klines(client, symbol, notify_func)
 
+    last_status_min = None
     while True:
         try:
             status = state.get_paper_status()

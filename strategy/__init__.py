@@ -14,6 +14,7 @@ from strategy.risk import (
     max_loss_from_capital,
     limit_pnl_and_exit_price,
 )
+from strategy.advisory import evaluate_conditions
 
 __all__ = [
     "add_indicators",
@@ -27,4 +28,5 @@ __all__ = [
     "check_atr_trailing",
     "max_loss_from_capital",
     "limit_pnl_and_exit_price",
+    "evaluate_conditions",
 ]

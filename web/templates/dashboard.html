@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paper Trade – ATR Strategy</title>
+  <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #131722; color: #d1d4dc; }
+    .layout { display: flex; flex-direction: column; height: 100vh; }
+    /* Mảng 1: Tổng quan */
+    .overview { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; padding: 10px 16px; background: #1e222d; border-bottom: 1px solid #2a2e39; }
+    .overview label { font-weight: 600; color: #787b86; }
+    .overview input[type="number"] { width: 100px; padding: 6px 8px; background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc; border-radius: 4px; }
+    .overview .stat { padding: 4px 10px; background: #2a2e39; border-radius: 4px; font-size: 13px; }
+    .overview .stat.positive { color: #26a69a; }
+    .overview .stat.negative { color: #ef5350; }
+    .overview select { padding: 6px 10px; background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc; border-radius: 4px; cursor: pointer; }
+    .overview button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
+    .overview button.start { background: #26a69a; color: #fff; }
+    .overview button.pause { background: #f2a900; color: #000; }
+    .overview button.stop { background: #ef5350; color: #fff; }
+    .overview button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-weight: 600; font-size: 12px; }
+    .status-running { background: #26a69a; color: #fff; }
+    .status-paused { background: #f2a900; color: #000; }
+    .status-stopped { background: #636368; color: #fff; }
+    .refresh-msg { font-size: 11px; color: #787b86; }
+    /* Mảng 2 + 3: Content */
+    .content { flex: 1; display: flex; min-height: 0; }
+    /* Trái: Orders */
+    .orders-panel { flex: 0 0 320px; display: flex; flex-direction: column; background: #1e222d; border-right: 1px solid #2a2e39; overflow: hidden; }
+    .orders-panel h3 { margin: 0; padding: 10px 12px; font-size: 14px; border-bottom: 1px solid #2a2e39; }
+    .orders-table-wrap { flex: 1; overflow: auto; }
+    .orders-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .orders-table th { position: sticky; top: 0; background: #2a2e39; padding: 8px 6px; text-align: left; white-space: nowrap; }
+    .orders-table td { padding: 6px; border-bottom: 1px solid #2a2e39; }
+    .orders-table tr.pnl-positive { background: rgba(38, 166, 154, 0.15); }
+    .orders-table tr.pnl-negative { background: rgba(239, 83, 80, 0.15); }
+    .orders-table tr.pnl-positive:hover { background: rgba(38, 166, 154, 0.25); }
+    .orders-table tr.pnl-negative:hover { background: rgba(239, 83, 80, 0.25); }
+    .orders-table .pnl-pos { color: #26a69a; }
+    .orders-table .pnl-neg { color: #ef5350; }
+    /* Phải: Charts */
+    .charts-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .chart-price-wrap { flex: 0 0 66.666%; height: 0; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid #2a2e39; }
+    .chart-price-wrap .chart-title { padding: 4px 12px; font-size: 12px; color: #787b86; }
+    #chartPrice { flex: 1; min-height: 200px; }
+    .chart-indicator-wrap { flex: 0 0 33.333%; min-height: 180px; display: flex; flex-direction: column; }
+    .chart-indicator-wrap .chart-title { padding: 4px 12px; font-size: 12px; color: #787b86; }
+    #chartIndicator { flex: 1; min-height: 120px; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <header class="overview">
+      <label>Vốn (USDT)</label>
+      <input type="number" id="initial_capital" value="1000" min="1" step="1">
+      <button class="start" id="btnStart">Kích hoạt</button>
+      <button class="pause" id="btnPause">Tạm dừng</button>
+      <button class="stop" id="btnStop">Dừng</button>
+      <span class="status-badge status-stopped" id="statusBadge">stopped</span>
+      <span class="stat" id="statStarted">Bắt đầu: —</span>
+      <label>Khung thời gian</label>
+      <select id="timeframe">
+        <option value="1m">1 phút</option>
+        <option value="5m" selected>5 phút</option>
+        <option value="15m">15 phút</option>
+        <option value="1h">1 giờ</option>
+        <option value="4h">4 giờ</option>
+        <option value="1d">1 ngày</option>
+        <option value="3d">3 ngày</option>
+      </select>
+      <span class="stat" id="statTrades">Lệnh: 0</span>
+      <span class="stat" id="statWinrate">Winrate: 0%</span>
+      <span class="stat" id="statPnl">PNL: 0.00</span>
+      <span class="stat" id="statBalance">Vốn: 0.00</span>
+      <span class="refresh-msg" id="refreshMsg">Cập nhật 5s</span>
+    </header>
+
+    <div class="content">
+      <aside class="orders-panel">
+        <h3>Lệnh (mới nhất trên cùng)</h3>
+        <div class="orders-table-wrap">
+          <table class="orders-table">
+            <thead>
+              <tr>
+                <th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody"></tbody>
+          </table>
+        </div>
+      </aside>
+
+      <main class="charts-panel">
+        <div class="chart-price-wrap">
+          <div class="chart-title" id="chartPriceTitle">Giá —</div>
+          <div id="chartPrice"></div>
+        </div>
+        <div class="chart-indicator-wrap">
+          <div class="chart-title">Chỉ báo RSI (0-100) & ATR</div>
+          <div id="chartIndicator"></div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+(function() {
+  const INTERVAL_MS = 5000;
+  let chartPrice = null, chartIndicator = null;
+  let seriesCandle = null, seriesEma = null;
+  let seriesRsi = null, seriesAtr = null;
+  let currentTimeframe = '5m';
+  let lastOrders = [];
+  let lastKlines = { ohlc: [], indicators: {} };
+
+  const capitalInput = document.getElementById('initial_capital');
+  const statusBadge = document.getElementById('statusBadge');
+  const timeframeSelect = document.getElementById('timeframe');
+  const ordersBody = document.getElementById('ordersBody');
+  const chartPriceTitle = document.getElementById('chartPriceTitle');
+  const refreshMsg = document.getElementById('refreshMsg');
+
+  function setStatusBadge(s) {
+    statusBadge.textContent = s;
+    statusBadge.className = 'status-badge ';
+    if (s === 'running') statusBadge.classList.add('status-running');
+    else if (s === 'paused') statusBadge.classList.add('status-paused');
+    else statusBadge.classList.add('status-stopped');
+  }
+
+  function formatDate(x) {
+    if (!x) return '—';
+    try { return new Date(x).toLocaleString('vi-VN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch(e) { return String(x); }
+  }
+
+  function updateOverview(d) {
+    document.getElementById('statStarted').textContent = 'Bắt đầu: ' + (d.paper_started_at ? formatDate(d.paper_started_at) : '—');
+    document.getElementById('statTrades').textContent = 'Lệnh: ' + (d.paper_trades_count || 0);
+    document.getElementById('statWinrate').textContent = 'Winrate: ' + (d.paper_winrate != null ? d.paper_winrate : 0) + '%';
+    const pnl = d.paper_total_pnl != null ? d.paper_total_pnl : 0;
+    const elPnl = document.getElementById('statPnl');
+    elPnl.textContent = 'PNL: ' + pnl.toFixed(2);
+    elPnl.className = 'stat ' + (pnl >= 0 ? 'positive' : 'negative');
+    document.getElementById('statBalance').textContent = 'Vốn: ' + (d.paper_balance != null ? d.paper_balance : 0).toFixed(2);
+    setStatusBadge(d.paper_status || 'stopped');
+  }
+
+  function fetchOrders() {
+    fetch('/api/orders').then(r => r.json()).then(data => {
+      const orders = data.orders || [];
+      lastOrders = orders;
+      ordersBody.innerHTML = orders.map(o => {
+        const pnl = o.pnl != null ? o.pnl : 0;
+        const rowClass = pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+        const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+        const pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+        return '<tr class="' + rowClass + '"><td>' + (o.side || '') + (o.is_open ? ' (mở)' : '') +
+          '</td><td>' + formatDate(o.entry_time) + '</td><td>' + (o.entry_price != null ? Number(o.entry_price).toFixed(2) : '') +
+          '</td><td>' + formatDate(o.exit_time) + '</td><td>' + (o.exit_price != null ? Number(o.exit_price).toFixed(2) : '') +
+          '</td><td class="' + pnlClass + '">' + pnlStr + '</td></tr>';
+      }).join('');
+    }).catch(() => {});
+  }
+
+  function toChartTime(isoStr) {
+    if (!isoStr) return null;
+    const d = new Date(isoStr);
+    return Math.floor(d.getTime() / 1000);
+  }
+
+  function buildMarkers(orders) {
+    const markers = [];
+    (orders || []).forEach(o => {
+      const tEntry = o.entry_time ? toChartTime(o.entry_time) : null;
+      if (tEntry) markers.push({ time: tEntry, position: o.side === 'LONG' ? 'belowBar' : 'aboveBar', color: o.side === 'LONG' ? '#26a69a' : '#ef5350', shape: 'arrowUp', text: 'Vào' });
+      const tExit = o.exit_time ? toChartTime(o.exit_time) : null;
+      if (tExit) markers.push({ time: tExit, position: o.side === 'LONG' ? 'aboveBar' : 'belowBar', color: '#787b86', shape: 'arrowDown', text: 'Ra' });
+    });
+    return markers;
+  }
+
+  function fetchKlines() {
+    const interval = timeframeSelect.value;
+    currentTimeframe = interval;
+    fetch('/api/klines?interval=' + encodeURIComponent(interval) + '&limit=500')
+      .then(r => r.json())
+      .then(data => {
+        lastKlines = data;
+        const ohlc = data.ohlc || [];
+        chartPriceTitle.textContent = 'Giá ' + (data.symbol || '') + ' ' + interval;
+        if (!ohlc.length) return;
+        const candleData = ohlc.map(c => ({ time: toChartTime(c.time), open: c.open, high: c.high, low: c.low, close: c.close }));
+        const ind = data.indicators || {};
+        const times = ind.times || ohlc.map(c => c.time);
+        if (seriesCandle) { seriesCandle.setData(candleData); seriesCandle.setMarkers(buildMarkers(lastOrders)); }
+        if (seriesEma && ind.EMA && ind.EMA.length) {
+          seriesEma.setData(times.map((t, i) => ({ time: toChartTime(t), value: ind.EMA[i] })).filter(x => x.time));
+        }
+        if (chartIndicator && ind.RSI && ind.RSI.length) {
+          const rsiData = times.map((t, i) => ({ time: toChartTime(t), value: ind.RSI[i] })).filter(x => x.time != null);
+          const atrData = times.map((t, i) => ({ time: toChartTime(t), value: ind.ATR[i] })).filter(x => x.time != null);
+          if (seriesRsi) seriesRsi.setData(rsiData);
+          if (seriesAtr) seriesAtr.setData(atrData);
+        }
+      }).catch(() => {});
+  }
+
+  function initCharts() {
+    const opts = { layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' }, grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } }, width: document.getElementById('chartPrice').clientWidth, height: document.getElementById('chartPrice').clientHeight, timeScale: { timeVisible: true, secondsVisible: false } };
+    chartPrice = LightweightCharts.createChart(document.getElementById('chartPrice'), opts);
+    seriesCandle = chartPrice.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false });
+    seriesEma = chartPrice.addLineSeries({ color: '#f2a900', lineWidth: 2 });
+    chartPrice.timeScale().fitContent();
+
+    const optsInd = { layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' }, grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } }, width: document.getElementById('chartIndicator').clientWidth, height: document.getElementById('chartIndicator').clientHeight };
+    chartIndicator = LightweightCharts.createChart(document.getElementById('chartIndicator'), optsInd);
+    seriesRsi = chartIndicator.addLineSeries({ color: '#9c27b0', lineWidth: 2 });
+    seriesAtr = chartIndicator.addLineSeries({ color: '#ff9800', lineWidth: 1 });
+    chartIndicator.timeScale().fitContent();
+
+    chartPrice.timeScale().subscribeVisibleTimeRangeChange(() => {
+      const range = chartPrice.timeScale().getVisibleRange();
+      if (range && chartIndicator) chartIndicator.timeScale().setVisibleRange(range);
+    });
+    chartIndicator.timeScale().subscribeVisibleTimeRangeChange(() => {
+      const range = chartIndicator.timeScale().getVisibleRange();
+      if (range && chartPrice) chartPrice.timeScale().setVisibleRange(range);
+    });
+  }
+
+  function refresh() {
+    fetch('/api/status').then(r => r.json()).then(d => {
+      updateOverview(d);
+      fetchOrders();
+    }).catch(() => {});
+  }
+
+  function resizeCharts() {
+    if (chartPrice) chartPrice.applyOptions({ width: document.getElementById('chartPrice').clientWidth, height: document.getElementById('chartPrice').clientHeight });
+    if (chartIndicator) chartIndicator.applyOptions({ width: document.getElementById('chartIndicator').clientWidth, height: document.getElementById('chartIndicator').clientHeight });
+  }
+
+  document.getElementById('btnStart').addEventListener('click', () => {
+    const cap = parseFloat(capitalInput.value);
+    if (!(cap > 0)) { alert('Nhập vốn > 0'); return; }
+    fetch('/api/paper/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initial_capital: cap }) })
+      .then(r => r.json()).then(d => { if (d.ok) refresh(); else alert(d.error || 'Lỗi'); });
+  });
+  document.getElementById('btnPause').addEventListener('click', () => {
+    fetch('/api/paper/pause', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
+  });
+  document.getElementById('btnStop').addEventListener('click', () => {
+    fetch('/api/paper/stop', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
+  });
+  timeframeSelect.addEventListener('change', () => { fetchKlines(); });
+
+  window.addEventListener('resize', resizeCharts);
+  refresh();
+  fetchKlines();
+  setInterval(refresh, INTERVAL_MS);
+  setInterval(fetchOrders, INTERVAL_MS);
+  setInterval(fetchKlines, INTERVAL_MS);
+  setTimeout(() => { initCharts(); fetchKlines(); resizeCharts(); }, 100);
+})();
+  </script>
+</body>
+</html>
