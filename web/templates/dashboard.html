@@ -316,7 +316,7 @@
   }
 
   function initCharts() {
-    const rightOffset = 350;
+    const rightOffset = 50;
     const opts = {
       layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
       grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
@@ -325,7 +325,7 @@
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
-        rightBarOffset: rightOffset,
+        rightOffset: rightOffset,
         lockVisibleTimeRangeOnResize: true,
         minBarSpacing: 0.5,
       },
@@ -346,7 +346,7 @@
       height: document.getElementById('chartIndicator').clientHeight,
       timeScale: {
         timeVisible: true,
-        rightBarOffset: rightOffset,
+        rightOffset: rightOffset,
         lockVisibleTimeRangeOnResize: true,
         minBarSpacing: 0.5,
       },
