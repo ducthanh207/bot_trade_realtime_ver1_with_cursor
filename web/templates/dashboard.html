@@ -315,6 +315,28 @@
       }).catch(() => {});
   }
 
+  function getValueAtTime(time) {
+    if (!lastKlines || !lastKlines.ohlc || !lastKlines.ohlc.length) return null;
+    const ohlc = lastKlines.ohlc;
+    const ind = lastKlines.indicators || {};
+    const t = typeof time === 'number' ? time : (typeof time === 'string' ? toChartTime(time) : null);
+    if (t == null) return null;
+    for (let i = 0; i < ohlc.length; i++) {
+      if (toChartTime(ohlc[i].time) === t) {
+        const close = ohlc[i].close != null ? Number(ohlc[i].close) : null;
+        const rsi = (ind.RSI && ind.RSI[i] != null) ? Number(ind.RSI[i]) : null;
+        return { close: close, rsi: rsi, time: t };
+      }
+    }
+    var best = null, bestDiff = Infinity;
+    for (let i = 0; i < ohlc.length; i++) {
+      const ct = toChartTime(ohlc[i].time);
+      const d = Math.abs(ct - t);
+      if (d < bestDiff) { bestDiff = d; best = { close: Number(ohlc[i].close), rsi: (ind.RSI && ind.RSI[i] != null) ? Number(ind.RSI[i]) : null, time: ct }; }
+    }
+    return best;
+  }
+
   function initCharts() {
     const rightOffset = 50;
     const opts = {
@@ -322,6 +344,7 @@
       grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
       width: document.getElementById('chartPrice').clientWidth,
       height: document.getElementById('chartPrice').clientHeight,
+      handleScale: { mouseWheel: true, axisPressedMouseMove: false, pinch: false },
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
@@ -344,6 +367,7 @@
       grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
       width: document.getElementById('chartIndicator').clientWidth,
       height: document.getElementById('chartIndicator').clientHeight,
+      handleScale: { mouseWheel: true, axisPressedMouseMove: false, pinch: false },
       timeScale: {
         timeVisible: true,
         rightOffset: rightOffset,
@@ -367,6 +391,45 @@
       userHasZoomedOrPanned = true;
       const range = chartIndicator.timeScale().getVisibleRange();
       if (range && chartPrice) chartPrice.timeScale().setVisibleRange(range);
+    });
+
+    function getCrosshairPoint(series, param) {
+      if (!param || param.time == null) return null;
+      var pt = param.seriesData && param.seriesData.get(series);
+      if (!pt) return null;
+      var v = pt.close != null ? pt.close : pt.value;
+      return (v != null && Number.isFinite(v)) ? { time: param.time, value: v } : null;
+    }
+    function setOtherCrosshair(fromPrice, time, value) {
+      if (fromPrice && chartIndicator && seriesRsi && value != null && Number.isFinite(value)) {
+        try { chartIndicator.setCrosshairPosition(value, time, seriesRsi); } catch (e) {}
+      } else if (fromPrice && chartIndicator) {
+        try { chartIndicator.clearCrosshairPosition(); } catch (e) {}
+      } else if (!fromPrice && chartPrice && seriesCandle && value != null && Number.isFinite(value)) {
+        try { chartPrice.setCrosshairPosition(value, time, seriesCandle); } catch (e) {}
+      } else if (!fromPrice && chartPrice) {
+        try { chartPrice.clearCrosshairPosition(); } catch (e) {}
+      }
+    }
+    chartPrice.subscribeCrosshairMove(function(param) {
+      var pt = getCrosshairPoint(seriesCandle, param);
+      if (pt) {
+        var at = getValueAtTime(pt.time);
+        if (at && at.rsi != null) setOtherCrosshair(true, pt.time, at.rsi);
+        else setOtherCrosshair(true, pt.time, null);
+      } else {
+        if (chartIndicator) try { chartIndicator.clearCrosshairPosition(); } catch (e) {}
+      }
+    });
+    chartIndicator.subscribeCrosshairMove(function(param) {
+      var pt = getCrosshairPoint(seriesRsi, param);
+      if (pt) {
+        var at = getValueAtTime(pt.time);
+        if (at && at.close != null) setOtherCrosshair(false, pt.time, at.close);
+        else setOtherCrosshair(false, pt.time, null);
+      } else {
+        if (chartPrice) try { chartPrice.clearCrosshairPosition(); } catch (e) {}
+      }
     });
   }
 
