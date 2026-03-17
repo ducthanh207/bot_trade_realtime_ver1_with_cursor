@@ -160,8 +160,11 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                     fee_out = size * exit_px * settings.TAKER_FEE
                     candidates.append((df_1m.index[-1] if not df_1m.empty else ts_4h, pnl_lim - fee_out, exit_px, "4H_EXIT"))
 
-                # LAYER 2b: Early exit
-                if long_exit_early(prev_row, row) if side == "LONG" else short_exit_early(prev_row, row):
+                # LAYER 2b: Early exit chỉ khi đã sang nến 4h mới (tránh loop)
+                row_4h_ts = df_4h.index[-1]
+                entry_4h_ts = open_trade.get("entry_4h_ts")
+                allow_early_exit = entry_4h_ts is None or row_4h_ts != entry_4h_ts
+                if allow_early_exit and (long_exit_early(prev_row, row) if side == "LONG" else short_exit_early(prev_row, row)):
                     pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
                     pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
                     exit_px = px_lim if px_lim is not None else exit_px_ref
@@ -213,6 +216,8 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                     atr_now = row["ATR"]
                     trail_dist = atr_now * settings.ATR_MULTIPLIER
                     init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
+                    # Lưu entry_4h_ts để tránh early exit ngay trên cùng nến vừa vào (gây loop)
+                    entry_4h_ts = df_4h.index[-1]
                     state.set_open_trade({
                         "side": side,
                         "entry_time": datetime.now(_tz_app),
@@ -224,6 +229,7 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                         "notional": notional,
                         "trail_stop": init_stop,
                         "last_sl_check": df_1m.index[-1] if not df_1m.empty else ts_4h,
+                        "entry_4h_ts": entry_4h_ts,
                     })
                     if notify_func:
                         notify_func(

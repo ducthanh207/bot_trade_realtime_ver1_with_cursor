@@ -186,7 +186,16 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         fee_out = size * exit_px * settings.TAKER_FEE
                         candidates.append((df_1m.index[-1] if not df_1m.empty else ts_4h, pnl_lim - fee_out, exit_px, "4H_EXIT"))
 
-                    if long_exit_early(prev_row_closed, row_closed) if side == "LONG" else short_exit_early(prev_row_closed, row_closed):
+                    # Early exit chỉ áp dụng khi đã có nến 4h mới đóng sau lúc vào (tránh loop: cùng nến vừa vào vừa thoát)
+                    row_closed_ts = df_4h.index[-2]
+                    entry_4h_ts_val = open_trade.get("entry_4h_ts")
+                    if entry_4h_ts_val is not None:
+                        try:
+                            entry_4h_ts_val = pd.Timestamp(entry_4h_ts_val)
+                        except Exception:
+                            entry_4h_ts_val = None
+                    allow_early_exit = entry_4h_ts_val is None or row_closed_ts != entry_4h_ts_val
+                    if allow_early_exit and (long_exit_early(prev_row_closed, row_closed) if side == "LONG" else short_exit_early(prev_row_closed, row_closed)):
                         pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
                         pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
                         exit_px = px_lim if px_lim is not None else exit_px_ref
@@ -264,6 +273,8 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                             return x if pd.notna(x) else None
                         except (TypeError, ValueError):
                             return None
+                    # Lưu entry_4h_ts để tránh early exit ngay trên cùng nến vừa vào (gây loop)
+                    entry_4h_ts = df_4h.index[-2]
                     state.set_paper_open_trade({
                         "side": side,
                         "entry_time": datetime.now(_tz_app),
@@ -278,6 +289,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         "entry_rsi": _f(row_closed.get("RSI")),
                         "entry_ema_rsi": _f(row_closed.get("EMA_RSI")),
                         "entry_wma_rsi": _f(row_closed.get("WMA_RSI")),
+                        "entry_4h_ts": entry_4h_ts,
                     })
                     state.set_paper_balance(balance_after_fee)
                     try:
