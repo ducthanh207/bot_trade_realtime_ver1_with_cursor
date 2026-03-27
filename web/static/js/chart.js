@@ -59,18 +59,6 @@
     return null;
   }
 
-  /** Tránh setVisibleRange ping-pong giữa 2 chart (gây giật trái/phải khi zoom/pan). */
-  function visibleRangeNearlyEqual(a, b) {
-    if (!a || !b) return false;
-    var af = toUnixSeconds(a.from);
-    var at = toUnixSeconds(a.to);
-    var bf = toUnixSeconds(b.from);
-    var bt = toUnixSeconds(b.to);
-    if (af == null || at == null || bf == null || bt == null) return false;
-    var eps = 4;
-    return Math.abs(af - bf) <= eps && Math.abs(at - bt) <= eps;
-  }
-
   /** Đếm cập nhật time scale từ code (không phải user): chặn subscribe ping-pong. */
   let timeSyncSuppress = 0;
 
@@ -85,18 +73,28 @@
     });
   }
 
-  function syncPeerVisibleTimeRange(sourceChart, targetChart) {
+  /**
+   * Đồng bộ khung nhìn giữa chart giá và chart indicator theo chỉ số nến (logical range).
+   * Cùng dữ liệu → kéo chart nào chart kia bám đúng (không lệch như đồng bộ theo time float).
+   */
+  function logicalRangeNearlyEqual(a, b) {
+    if (!a || !b || a.from == null || a.to == null || b.from == null || b.to == null) return false;
+    var eps = 0.0005;
+    return Math.abs(a.from - b.from) <= eps && Math.abs(a.to - b.to) <= eps;
+  }
+
+  function syncPeerLogicalRange(sourceChart, targetChart) {
     if (!sourceChart || !targetChart) return;
-    var range = sourceChart.timeScale().getVisibleRange();
-    if (!range) return;
+    var lr = sourceChart.timeScale().getVisibleLogicalRange();
+    if (!lr || lr.from == null || lr.to == null) return;
     var peer = null;
     try {
-      peer = targetChart.timeScale().getVisibleRange();
+      peer = targetChart.timeScale().getVisibleLogicalRange();
     } catch (e1) {}
-    if (peer && visibleRangeNearlyEqual(peer, range)) return;
+    if (peer && logicalRangeNearlyEqual(peer, lr)) return;
     timeSyncSuppress++;
     try {
-      targetChart.timeScale().setVisibleRange(range);
+      targetChart.timeScale().setVisibleLogicalRange({ from: lr.from, to: lr.to });
     } catch (e2) {}
     queueMicrotask(function () {
       timeSyncSuppress--;
@@ -784,15 +782,15 @@
     seriesEmaRsi = chartIndicator.addLineSeries({ color: "#26a69a", lineWidth: 2 });
     seriesWmaRsi = chartIndicator.addLineSeries({ color: "#ef5350", lineWidth: 2 });
 
-    chartPrice.timeScale().subscribeVisibleTimeRangeChange(function () {
+    chartPrice.timeScale().subscribeVisibleLogicalRangeChange(function () {
       if (timeSyncSuppress > 0) return;
       if (!chartIndicator) return;
-      syncPeerVisibleTimeRange(chartPrice, chartIndicator);
+      syncPeerLogicalRange(chartPrice, chartIndicator);
     });
-    chartIndicator.timeScale().subscribeVisibleTimeRangeChange(function () {
+    chartIndicator.timeScale().subscribeVisibleLogicalRangeChange(function () {
       if (timeSyncSuppress > 0) return;
       if (!chartPrice) return;
-      syncPeerVisibleTimeRange(chartIndicator, chartPrice);
+      syncPeerLogicalRange(chartIndicator, chartPrice);
     });
 
     function getCrosshairPoint(series, param) {
