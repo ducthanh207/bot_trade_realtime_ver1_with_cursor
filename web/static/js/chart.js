@@ -50,6 +50,95 @@
     return sec;
   }
 
+  /** getVisibleRange có thể trả UTCTimestamp (số) hoặc BusinessDay — chuẩn hóa về giây Unix. */
+  function toUnixSeconds(t) {
+    if (t == null) return null;
+    if (typeof t === "number" && Number.isFinite(t)) return t;
+    if (typeof t === "object" && t.year != null && t.month != null && t.day != null) {
+      return Math.floor(Date.UTC(t.year, t.month - 1, t.day, 0, 0, 0) / 1000);
+    }
+    return null;
+  }
+
+  function estimateAvgBarSec(ohlc) {
+    if (!ohlc || ohlc.length < 2) return 300;
+    var sum = 0;
+    var n = 0;
+    for (var i = 1; i < Math.min(ohlc.length, 50); i++) {
+      var d = Math.abs(toChartTime(ohlc[i].time) - toChartTime(ohlc[i - 1].time));
+      if (d > 0) {
+        sum += d;
+        n++;
+      }
+    }
+    return n ? sum / n : 300;
+  }
+
+  function captureViewSnapshot() {
+    if (!chartPrice || !fullKlinePayload || !fullKlinePayload.ohlc || !fullKlinePayload.ohlc.length) return null;
+    try {
+      var vr = chartPrice.timeScale().getVisibleRange();
+      var lr = chartPrice.timeScale().getVisibleLogicalRange();
+      if (!vr) return null;
+      var from = toUnixSeconds(vr.from);
+      var to = toUnixSeconds(vr.to);
+      if (from == null || to == null || from >= to) return null;
+      var ohlc = fullKlinePayload.ohlc;
+      var n = ohlc.length;
+      var avg = estimateAvgBarSec(ohlc);
+      var atRight = false;
+      if (lr && lr.to != null && n > 0) {
+        atRight = lr.to >= n - 1.85;
+      } else {
+        var lastT = toChartTime(ohlc[n - 1].time);
+        atRight = lastT - to <= avg * 4;
+      }
+      return { from: from, to: to, atRight: atRight, avgBarSec: avg };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function restoreAfterDataUpdate(ohlc) {
+    if (!chartPrice || !ohlc || !ohlc.length) return;
+    var snap = pendingViewSnapshot;
+    pendingViewSnapshot = null;
+    if (!snap) return;
+    var t0 = toChartTime(ohlc[0].time);
+    var t1 = toChartTime(ohlc[ohlc.length - 1].time);
+    var avg = snap.avgBarSec || estimateAvgBarSec(ohlc);
+    var minSpan = avg * 28;
+
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        try {
+          if (playbackIndex !== null) return;
+          if (snap.atRight) {
+            chartPrice.timeScale().scrollToRealTime();
+            if (chartIndicator) chartIndicator.timeScale().scrollToRealTime();
+            return;
+          }
+          var from = snap.from;
+          var to = snap.to;
+          if (to - from < minSpan) {
+            var mid = (from + to) / 2;
+            from = mid - minSpan / 2;
+            to = mid + minSpan / 2;
+          }
+          from = Math.max(t0, Math.min(from, t1));
+          to = Math.max(t0, Math.min(to, t1));
+          if (from >= to) {
+            chartPrice.timeScale().fitContent();
+            if (chartIndicator) chartIndicator.timeScale().fitContent();
+            return;
+          }
+          chartPrice.timeScale().setVisibleRange({ from: from, to: to });
+          if (chartIndicator) chartIndicator.timeScale().setVisibleRange({ from: from, to: to });
+        } catch (e) {}
+      });
+    });
+  }
+
   let chartPrice = null;
   let chartIndicator = null;
   let seriesCandle = null;
@@ -63,7 +152,8 @@
   let tvChartsInited = false;
   let hasInitialFit = false;
   let syncingVisibleRange = false;
-  let lastLogicalRange = null;
+  /** Khôi phục viewport sau poll API (theo thời gian, không dùng logical range — tránh co nến cực rộng). */
+  let pendingViewSnapshot = null;
 
   let fullKlinePayload = null;
   let lastRenderedForCrosshair = { ohlc: [], indicators: {} };
@@ -145,6 +235,7 @@
     if (!ohlc.length) {
       chartPriceTitleTv.textContent =
         "Không có nến — kiểm tra kết nối API / Binance · " + (data.symbol || "") + " " + interval;
+      pendingViewSnapshot = null;
       return;
     }
 
@@ -232,15 +323,18 @@
       if (seriesWmaRsi && wmaRsiData.length) seriesWmaRsi.setData(wmaRsiData);
     }
 
+    if (playbackIndex !== null) {
+      chartPrice.timeScale().fitContent();
+      if (chartIndicator) chartIndicator.timeScale().fitContent();
+      return;
+    }
+
     if (chartPrice && (forceFit || timeframeChanged || !hasInitialFit)) {
       chartPrice.timeScale().fitContent();
       if (chartIndicator) chartIndicator.timeScale().fitContent();
       hasInitialFit = true;
-    } else if (chartPrice && lastLogicalRange && lastLogicalRange.from != null && lastLogicalRange.to != null) {
-      try {
-        chartPrice.timeScale().setVisibleLogicalRange(lastLogicalRange);
-        if (chartIndicator) chartIndicator.timeScale().setVisibleLogicalRange(lastLogicalRange);
-      } catch (e) {}
+    } else if (chartPrice) {
+      restoreAfterDataUpdate(ohlc);
     }
   }
 
@@ -252,15 +346,10 @@
 
     if (playbackIndex !== null && !forceFitContent) return;
 
-    if (chartPrice && !forceFitContent && !timeframeChanged) {
-      try {
-        const lr = chartPrice.timeScale().getVisibleLogicalRange();
-        if (lr && lr.from != null && lr.to != null) lastLogicalRange = { from: lr.from, to: lr.to };
-      } catch (e) {
-        lastLogicalRange = null;
-      }
-    } else if (timeframeChanged) {
-      lastLogicalRange = null;
+    if (chartPrice && !forceFitContent && !timeframeChanged && playbackIndex === null) {
+      pendingViewSnapshot = captureViewSnapshot();
+    } else {
+      pendingViewSnapshot = null;
     }
 
     fetch("/api/klines?interval=" + encodeURIComponent(interval) + "&limit=500")
@@ -316,23 +405,35 @@
   }
 
   function initChartsTv() {
-    const rightOffset = 20;
+    const rightOffset = 12;
     const opts = {
       layout: { background: { type: "solid", color: "#131722" }, textColor: "#d1d4dc" },
       grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
       width: document.getElementById("chartPriceTv").clientWidth,
       height: document.getElementById("chartPriceTv").clientHeight,
-      handleScale: { mouseWheel: true, axisPressedMouseMove: false, pinch: false },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: { time: true, price: true },
+        mouseWheel: true,
+        pinch: true,
+      },
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
         rightOffset: rightOffset,
-        lockVisibleTimeRangeOnResize: false,
+        lockVisibleTimeRangeOnResize: true,
         rightBarStaysOnScroll: true,
         shiftVisibleRangeOnNewBar: false,
-        minBarSpacing: 0.5,
+        minBarSpacing: 0.8,
+        barSpacing: 6,
       },
-      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.2 }, borderVisible: true },
+      rightPriceScale: { scaleMargins: { top: 0.08, bottom: 0.22 }, borderVisible: true },
+      leftPriceScale: { visible: true, borderVisible: true },
     };
     chartPrice = LightweightCharts.createChart(document.getElementById("chartPriceTv"), opts);
     seriesCandle = chartPrice.addCandlestickSeries({
@@ -349,22 +450,40 @@
       lineWidth: 1,
       priceScaleId: "atr",
       priceLineVisible: false,
+      lastValueVisible: true,
     });
-    chartPrice.priceScale("atr").applyOptions({ autoScale: true, scaleMargins: { top: 0.4, bottom: 0.4 } });
+    chartPrice.priceScale("atr").applyOptions({
+      position: "left",
+      autoScale: true,
+      scaleMargins: { top: 0.12, bottom: 0.12 },
+      borderVisible: true,
+      entireTextOnly: false,
+    });
 
     const optsInd = {
       layout: { background: { type: "solid", color: "#131722" }, textColor: "#d1d4dc" },
       grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
       width: document.getElementById("chartIndicatorTv").clientWidth,
       height: document.getElementById("chartIndicatorTv").clientHeight,
-      handleScale: { mouseWheel: true, axisPressedMouseMove: false, pinch: false },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: { time: true, price: true },
+        mouseWheel: true,
+        pinch: true,
+      },
       timeScale: {
         timeVisible: true,
         rightOffset: rightOffset,
-        lockVisibleTimeRangeOnResize: false,
+        lockVisibleTimeRangeOnResize: true,
         rightBarStaysOnScroll: true,
         shiftVisibleRangeOnNewBar: false,
-        minBarSpacing: 0.5,
+        minBarSpacing: 0.8,
+        barSpacing: 6,
       },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
     };
