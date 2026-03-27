@@ -19,7 +19,12 @@ except Exception:
     _tz_app = timezone.utc
 
 _web_dir = Path(__file__).resolve().parent
-app = Flask(__name__, template_folder=str(_web_dir / "templates"))
+app = Flask(
+    __name__,
+    template_folder=str(_web_dir / "templates"),
+    static_folder=str(_web_dir / "static"),
+    static_url_path="/static",
+)
 
 
 def _serialize(obj):
@@ -372,7 +377,9 @@ def api_klines():
         client = _get_client()
         df = client.get_klines(settings.SYMBOL, interval, limit)
         if df.empty:
-            return jsonify({"ohlc": [], "indicators": {}, "interval": interval})
+            return jsonify(
+                {"ohlc": [], "indicators": {}, "interval": interval, "symbol": settings.SYMBOL}
+            )
         df = add_indicators(df)
         ohlc = []
         for ts, row in df.iterrows():
@@ -396,7 +403,14 @@ def api_klines():
         }
         return jsonify({"ohlc": ohlc, "indicators": indicators, "interval": interval, "symbol": settings.SYMBOL})
     except Exception as e:
-        return jsonify({"ohlc": [], "indicators": {}, "error": str(e)})
+        sym = ""
+        try:
+            from config import settings as _s
+
+            sym = _s.SYMBOL
+        except Exception:
+            pass
+        return jsonify({"ohlc": [], "indicators": {}, "symbol": sym, "error": str(e)})
 
 
 def _pct_pnl(profit: float, margin: float) -> float:

@@ -1,10 +1,23 @@
 (function () {
-  const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+  const chartWrap = document.getElementById("chartWrap");
+  const chartEl = document.getElementById("chart");
+
+  const chart = LightweightCharts.createChart(chartEl, {
     layout: { background: { type: "solid", color: "#131722" }, textColor: "#d1d4dc" },
     grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
     rightPriceScale: { borderVisible: true },
     timeScale: { timeVisible: true, secondsVisible: false },
+    width: chartWrap.clientWidth,
+    height: chartWrap.clientHeight,
   });
+
+  const tradeVlines = document.createElement("div");
+  tradeVlines.id = "tradeVlines";
+  tradeVlines.setAttribute("aria-hidden", "true");
+  tradeVlines.style.cssText =
+    "position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:10;overflow:hidden;";
+  chartEl.style.position = "relative";
+  chartEl.appendChild(tradeVlines);
 
   const candleSeries = chart.addCandlestickSeries({
     upColor: "#26a69a",
@@ -17,7 +30,11 @@
   const midSeries = chart.addLineSeries({ color: "#f2a900", lineWidth: 2 });
   const lowerSeries = chart.addLineSeries({ color: "#ab47bc", lineWidth: 2 });
 
+  /** Trades từ API (entry_time / exit_time ISO) — dùng cho đường dọc */
+  let lastTrades = [];
+
   function toChartTime(iso) {
+    if (!iso) return null;
     const d = new Date(iso);
     return Math.floor(d.getTime() / 1000);
   }
@@ -27,6 +44,40 @@
       .map((x) => ({ time: toChartTime(x.time), value: Number(x.value) }))
       .filter((x) => x.time && Number.isFinite(x.value));
   }
+
+  function updateTradeVerticalLines() {
+    if (!tradeVlines) return;
+    tradeVlines.innerHTML = "";
+    const ts = chart.timeScale();
+    for (let ti = 0; ti < lastTrades.length; ti++) {
+      const t = lastTrades[ti];
+      const pairs = [
+        [t.entry_time, "#26a69a"],
+        [t.exit_time, "#78909c"],
+      ];
+      for (let pi = 0; pi < pairs.length; pi++) {
+        const iso = pairs[pi][0];
+        const color = pairs[pi][1];
+        if (!iso) continue;
+        const tm = toChartTime(iso);
+        if (!tm) continue;
+        const x = ts.timeToCoordinate(tm);
+        if (x == null || x === undefined || !Number.isFinite(x)) continue;
+        const line = document.createElement("div");
+        line.style.cssText =
+          "position:absolute;top:0;bottom:0;width:0;border-left:1px dashed " +
+          color +
+          ";left:" +
+          x +
+          "px;opacity:0.9;";
+        tradeVlines.appendChild(line);
+      }
+    }
+  }
+
+  chart.timeScale().subscribeVisibleTimeRangeChange(function () {
+    updateTradeVerticalLines();
+  });
 
   async function loadData() {
     const symbol = (document.getElementById("symbol").value || "BTCUSDT").trim().toUpperCase();
@@ -63,25 +114,39 @@
     midSeries.setData(mapLine(lines.mid));
     lowerSeries.setData(mapLine(lines.lower));
 
+    lastTrades = Array.isArray(pct.trades) ? pct.trades : [];
+
     const statEl = document.getElementById("stat");
     const tradeCount = Number(pct.trade_count || 0);
-    const avgAbs = Number(pct.avg_abs_pct || 0);
-    statEl.textContent = "trade_count=" + tradeCount + " | avg_abs_pct=" + avgAbs.toFixed(4) + "%";
+    const halfPct = pct.band_half_width_pct != null ? Number(pct.band_half_width_pct) : Number(pct.avg_abs_pct || 0);
+    const halfUsdt = pct.band_half_width_usdt != null ? Number(pct.band_half_width_usdt) : null;
+    statEl.textContent =
+      "window_trades=" +
+      tradeCount +
+      " | ±half_width=" +
+      (Number.isFinite(halfPct) ? halfPct.toFixed(4) + "%" : "—") +
+      " (≈ " +
+      (halfUsdt != null && Number.isFinite(halfUsdt) ? halfUsdt.toFixed(2) + " USDT @ last close" : "—") +
+      ") | trades=" +
+      lastTrades.length;
 
     chart.timeScale().fitContent();
+    requestAnimationFrame(function () {
+      requestAnimationFrame(updateTradeVerticalLines);
+    });
   }
 
   document.getElementById("btnLoad").addEventListener("click", function () {
-    loadData().catch((err) => alert("Load error: " + err));
+    loadData().catch(function (err) {
+      alert("Load error: " + err);
+    });
   });
 
   window.addEventListener("resize", function () {
-    const node = document.getElementById("chart");
-    chart.applyOptions({ width: node.clientWidth, height: node.clientHeight });
+    chart.applyOptions({ width: chartWrap.clientWidth, height: chartWrap.clientHeight });
+    requestAnimationFrame(updateTradeVerticalLines);
   });
 
-  // first load
-  const node = document.getElementById("chart");
-  chart.applyOptions({ width: node.clientWidth, height: node.clientHeight });
-  loadData().catch(() => {});
+  chart.applyOptions({ width: chartWrap.clientWidth, height: chartWrap.clientHeight });
+  loadData().catch(function () {});
 })();

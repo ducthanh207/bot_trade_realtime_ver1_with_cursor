@@ -30,17 +30,20 @@ Ghi chu:
 3. Chay lai logic phat hien lenh lich su:
    - Entry: `long_entry`/`short_entry`
    - Exit: `long_exit`/`short_exit`
-4. Lay `N` lenh gan nhat (custom lookback).
-5. Tinh `% change avg`:
-   - `avg_signed_pct = mean(pct_change)`
-   - `avg_abs_pct = mean(abs(pct_change))`
-6. Tao band quanh gia hien tai:
-   - `upper = current_close * (1 + avg_abs_pct/100)`
-   - `lower = current_close * (1 - avg_abs_pct/100)`
-7. Xuat du lieu line ngang cho chart:
-   - `mid_line`: line ngang tai `current_close`
-   - `upper_line`: line ngang tai `upper`
-   - `lower_line`: line ngang tai `lower`
+4. Chi **cac lenh da dong** theo chiến lược (base entry/exit), không lấy từ “tổng số nến”.
+
+5. Mỗi khi **một lệnh đóng** (thứ j, 0-based), tính **một lần** (chuẩn hóa **%**):
+   - `half_width_pct = mean( abs(pct_change) )` trên tối đa `lookback_trades` lệnh đã đóng gần nhất (gồm lệnh vừa đóng).  
+   - `pct_change` mỗi lệnh như mục “Định nghĩa % change” ở trên.
+
+6. Giá trị `half_width_pct` **giữ nguyên** cho mọi nến sau đó cho đến khi **có lệnh đóng tiếp theo**.
+
+7. Trên từng nến (vẫn là **giá** trên chart, bám nến):
+   - `mid = close`
+   - `upper = close * (1 + half_width_pct / 100)`
+   - `lower = close * (1 - half_width_pct / 100)`
+
+8. API: `band_half_width_pct` và `avg_abs_pct` (cùng ý — nửa độ rộng ± theo %); `band_half_width_usdt` = `current_close * band_half_width_pct / 100` (tiện đọc tại giá cuối).
 
 ## Input can custom
 
@@ -56,7 +59,7 @@ Ham logic tra ve:
 - danh sach lenh da detect
 - `% change avg` (signed + abs)
 - gia tri `upper`, `mid`, `lower` tai nen hien tai
-- series line ngang theo timeline de ve chart
+- series `upper` / `mid` / `lower` theo tung nen (khong con 3 duong ngang co dinh)
 
 ## Demo API + chart (dung Binance public data)
 
@@ -64,7 +67,7 @@ Da them:
 
 - `api_demo.py`: API doc lap
 - `dashboard_demo.html`: trang demo ve nen + bands
-- `overlay_pct_change_avg_demo.js`: logic ve 3 line bands
+- `overlay_pct_change_avg_demo.js`: logic ve 3 line bands + duong doc net dut (vao / ra) tu `pct.trades`
 
 API demo:
 

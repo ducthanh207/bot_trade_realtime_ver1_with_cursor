@@ -11,8 +11,16 @@
     input, select, button {
       background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc; border-radius: 4px; padding: 6px 8px;
     }
-    #chart { width: 100%; height: calc(100vh - 56px); }
+    #chartWrap { position: relative; width: 100%; height: calc(100vh - 56px); }
+    #chart { position: relative; width: 100%; height: 100%; }
+    #tradeVlines {
+      position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+      pointer-events: none; z-index: 10; overflow: hidden;
+    }
     .stat { margin-left: 8px; color: #9aa0ac; font-size: 12px; }
+    .legend { margin-left: 12px; font-size: 11px; color: #787b86; }
+    .legend .in { color: #26a69a; }
+    .legend .out { color: #78909c; }
   </style>
 </head>
 <body>
@@ -33,8 +41,11 @@
     <input id="lookback" type="number" min="1" max="200" value="15">
     <button id="btnLoad">Load</button>
     <span class="stat" id="stat">trade_count=0 | avg_abs_pct=0%</span>
+    <span class="legend"><span class="in">┃</span> Vào &nbsp; <span class="out">┃</span> Ra</span>
   </div>
-  <div id="chart"></div>
+  <div id="chartWrap">
+    <div id="chart"></div>
+  </div>
 
   <script src="./overlay_pct_change_avg_demo.js"></script>
 </body>

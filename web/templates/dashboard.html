@@ -4,117 +4,44 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Paper Trade – ATR Strategy</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
   <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
-  <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #131722; color: #d1d4dc; }
-    .layout { display: flex; flex-direction: column; height: 100vh; }
-    /* Mảng 1: Tổng quan */
-    .overview { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; padding: 10px 16px; background: #1e222d; border-bottom: 1px solid #2a2e39; }
-    .overview label { font-weight: 600; color: #787b86; }
-    .overview input[type="number"] { width: 100px; padding: 6px 8px; background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc; border-radius: 4px; }
-    .overview .stat { padding: 4px 10px; background: #2a2e39; border-radius: 4px; font-size: 13px; }
-    .overview .stat.positive { color: #26a69a; }
-    .overview .stat.negative { color: #ef5350; }
-    .overview select { padding: 6px 10px; background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc; border-radius: 4px; cursor: pointer; }
-    .overview button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
-    .overview button.start { background: #26a69a; color: #fff; }
-    .overview button.pause { background: #f2a900; color: #000; }
-    .overview button.stop { background: #ef5350; color: #fff; }
-    .overview button.btn-clear { background: #78909c; color: #fff; }
-    .overview button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .status-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-weight: 600; font-size: 12px; }
-    .status-running { background: #26a69a; color: #fff; }
-    .status-paused { background: #f2a900; color: #000; }
-    .status-stopped { background: #636368; color: #fff; }
-    .refresh-msg { font-size: 11px; color: #787b86; }
-    /* Hàng 2: quy tắc vốn (đòn bẩy, % vốn, nút cập nhật) */
-    .overview-rules { width: 100%; flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; margin-top: 6px; padding-top: 8px; border-top: 1px solid #2a2e39; }
-    .overview-rules label { font-weight: 600; color: #787b86; }
-    .overview-rules input[type="number"] { width: 80px; padding: 6px 8px; background: #2a2e39; border: 1px solid #363a45; color: #d1d4dc; border-radius: 4px; }
-    .overview-rules button.btn-rules { padding: 6px 14px; background: #2962ff; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
-    .overview-rules button.btn-rules:hover { background: #1e53e5; }
-    /* Mảng 2 + 3: Content – trái (list lệnh) và phải (chart) mỗi bên 50% chiều ngang */
-    .content { flex: 1; display: flex; min-height: 0; }
-    /* Trái: List lệnh – 50% chiều ngang, đủ chỗ hiển thị đủ cột */
-    .orders-panel { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; background: #1e222d; border-right: 1px solid #2a2e39; overflow: hidden; }
-    .orders-panel h3 { margin: 0; padding: 10px 12px; font-size: 14px; border-bottom: 1px solid #2a2e39; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .orders-panel .btn-export { padding: 6px 10px; font-size: 12px; background: #2a2e39; color: #d1d4dc; border: 1px solid #363a45; border-radius: 4px; cursor: pointer; }
-    .orders-panel .btn-export:hover { background: #363a45; }
-    .orders-table-wrap { flex: 1; overflow-x: auto; overflow-y: auto; min-height: 0; }
-    .orders-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; table-layout: auto; }
-    .orders-table th { position: sticky; top: 0; background: #2a2e39; padding: 6px 8px; text-align: left; white-space: nowrap; min-width: 1em; }
-    .orders-table td { padding: 6px 8px; border-bottom: 1px solid #2a2e39; white-space: nowrap; }
-    .orders-table th:nth-child(1), .orders-table td:nth-child(1) { min-width: 2.5em; }
-    .orders-table th:nth-child(2), .orders-table td:nth-child(2) { min-width: 5em; }
-    .orders-table th:nth-child(3), .orders-table td:nth-child(3) { min-width: 4em; }
-    .orders-table th:nth-child(4), .orders-table td:nth-child(4) { min-width: 8em; }
-    .orders-table th:nth-child(5), .orders-table td:nth-child(5) { min-width: 5em; }
-    .orders-table th:nth-child(6), .orders-table td:nth-child(6) { min-width: 8em; }
-    .orders-table th:nth-child(7), .orders-table td:nth-child(7) { min-width: 5em; }
-    .orders-table th:nth-child(8), .orders-table td:nth-child(8) { min-width: 5em; }
-    .orders-table th:nth-child(9), .orders-table td:nth-child(9) { min-width: 4em; }
-    .orders-table th:nth-child(10), .orders-table td:nth-child(10) { min-width: 5em; }
-    .orders-table th:nth-child(11), .orders-table td:nth-child(11) { min-width: 5em; }
-    .orders-table th:nth-child(12), .orders-table td:nth-child(12) { min-width: 4.5em; }
-    .orders-table tr.pnl-positive { background: rgba(38, 166, 154, 0.15); }
-    .orders-table tr.pnl-negative { background: rgba(239, 83, 80, 0.15); }
-    .orders-table tr.pnl-positive:hover { background: rgba(38, 166, 154, 0.25); }
-    .orders-table tr.pnl-negative:hover { background: rgba(239, 83, 80, 0.25); }
-    .orders-table .pnl-pos { color: #26a69a; }
-    .orders-table .pnl-neg { color: #ef5350; }
-    .orders-table .btn-close-order { padding: 4px 8px; font-size: 11px; background: #ef5350; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-    .orders-table .btn-close-order:hover { background: #c62828; }
-    .orders-table th:nth-child(13), .orders-table td:nth-child(13) { min-width: 5.5em; }
-    /* Phải: Charts – 50% chiều ngang; trong đó chart giá (2/3) trên, RSI/WMA/EMA (1/3) dưới */
-    .charts-panel { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
-    .chart-price-wrap { flex: 0 0 66.666%; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid #2a2e39; }
-    .chart-price-wrap .chart-title { padding: 4px 12px; font-size: 12px; color: #787b86; flex-shrink: 0; }
-    #chartPrice { flex: 1; min-height: 160px; }
-    .chart-indicator-wrap { flex: 0 0 33.333%; display: flex; flex-direction: column; min-height: 0; }
-    .chart-indicator-wrap .chart-title { padding: 4px 12px; font-size: 12px; color: #787b86; flex-shrink: 0; }
-    #chartIndicator { flex: 1; min-height: 120px; }
-  </style>
 </head>
 <body>
-  <div class="layout">
-    <header class="overview">
-      <label>Vốn (USDT)</label>
-      <input type="number" id="initial_capital" value="1000" min="1" step="1">
-      <button class="start" id="btnStart">Kích hoạt</button>
-      <button class="pause" id="btnPause">Tạm dừng</button>
-      <button class="stop" id="btnStop">Dừng</button>
-      <button type="button" class="btn-clear" id="btnClearHistory">Xóa toàn bộ</button>
-      <span class="status-badge status-stopped" id="statusBadge">stopped</span>
-      <span class="stat" id="statStarted">Bắt đầu: —</span>
-      <label>Khung thời gian</label>
-      <select id="timeframe">
-        <option value="1m">1 phút</option>
-        <option value="5m" selected>5 phút</option>
-        <option value="15m">15 phút</option>
-        <option value="1h">1 giờ</option>
-        <option value="4h">4 giờ</option>
-        <option value="1d">1 ngày</option>
-        <option value="3d">3 ngày</option>
-      </select>
-      <span class="stat" id="statTradesDone">Lệnh đã hoàn thành: 0</span>
-      <span class="stat" id="statOrdersOpen">Lệnh_Open: 0</span>
-      <span class="stat" id="statWinrate">Winrate: 0%</span>
-      <span class="stat" id="statPnl">PNL: 0.00</span>
-      <span class="stat" id="statPnlOpen">PNL_Open: 0.00</span>
-      <span class="stat" id="statBalance">Vốn: 0.00</span>
-      <span class="stat" id="statCapitalOpen">Capital_Open: 0.00</span>
-      <span class="refresh-msg" id="refreshMsg">Cập nhật 5s</span>
-      <div class="overview-rules">
-        <label>Đòn bẩy</label>
-        <input type="number" id="inputLeverage" min="1" max="125" step="1" value="20" title="1–125">
-        <label>% vốn vào lệnh</label>
-        <input type="number" id="inputWalletPct" min="1" max="100" step="0.5" value="30" title="1–100%">
-        <button type="button" class="btn-rules" id="btnCapitalRules">Cập nhật quy tắc vốn</button>
-      </div>
-    </header>
+  <div class="layout-root">
+    <nav class="tab-bar" role="tablist">
+      <button type="button" class="tab-btn active" data-tab="paper" role="tab" aria-selected="true">Paper trade</button>
+      <button type="button" class="tab-btn" data-tab="chart" role="tab" aria-selected="false">Biểu đồ</button>
+      <button type="button" class="tab-btn" data-tab="real" role="tab" aria-selected="false">Trade thật</button>
+    </nav>
 
-    <div class="content">
+    <!-- Tab 1: Paper -->
+    <section id="tab-paper" class="tab-panel active paper-layout" role="tabpanel">
+      <header class="overview">
+        <label>Vốn (USDT)</label>
+        <input type="number" id="initial_capital" value="1000" min="1" step="1">
+        <button class="start" id="btnStart">Kích hoạt</button>
+        <button class="pause" id="btnPause">Tạm dừng</button>
+        <button class="stop" id="btnStop">Dừng</button>
+        <button type="button" class="btn-clear" id="btnClearHistory">Xóa toàn bộ</button>
+        <span class="status-badge status-stopped" id="statusBadge">stopped</span>
+        <span class="stat" id="statStarted">Bắt đầu: —</span>
+        <span class="stat" id="statTradesDone">Lệnh đã hoàn thành: 0</span>
+        <span class="stat" id="statOrdersOpen">Lệnh_Open: 0</span>
+        <span class="stat" id="statWinrate">Winrate: 0%</span>
+        <span class="stat" id="statPnl">PNL: 0.00</span>
+        <span class="stat" id="statPnlOpen">PNL_Open: 0.00</span>
+        <span class="stat" id="statBalance">Vốn: 0.00</span>
+        <span class="stat" id="statCapitalOpen">Capital_Open: 0.00</span>
+        <span class="refresh-msg" id="refreshMsg">Cập nhật 5s</span>
+        <div class="overview-rules">
+          <label>Đòn bẩy</label>
+          <input type="number" id="inputLeverage" min="1" max="125" step="1" value="20" title="1–125">
+          <label>% vốn vào lệnh</label>
+          <input type="number" id="inputWalletPct" min="1" max="100" step="0.5" value="30" title="1–100%">
+          <button type="button" class="btn-rules" id="btnCapitalRules">Cập nhật quy tắc vốn</button>
+        </div>
+      </header>
       <aside class="orders-panel">
         <h3>Lệnh (mới nhất trên cùng) <button type="button" class="btn-export" id="btnExportCsv">Xuất CSV</button></h3>
         <div class="orders-table-wrap">
@@ -128,395 +55,60 @@
           </table>
         </div>
       </aside>
+    </section>
 
-      <main class="charts-panel">
-        <div class="chart-price-wrap">
-          <div class="chart-title" id="chartPriceTitle">Giá + Volume (Binance)</div>
-          <div id="chartPrice"></div>
+    <!-- Tab 2: Chart -->
+    <section id="tab-chart" class="tab-panel chart-tv-root" role="tabpanel">
+      <div class="chart-tv-toolbar">
+        <label>Khung</label>
+        <select id="timeframeTv">
+          <option value="1m">1 phút</option>
+          <option value="5m" selected>5 phút</option>
+          <option value="15m">15 phút</option>
+          <option value="1h">1 giờ</option>
+          <option value="4h">4 giờ</option>
+          <option value="1d">1 ngày</option>
+          <option value="3d">3 ngày</option>
+        </select>
+        <span class="stat" id="chartSymbolTitle" style="color:#d1d4dc;">—</span>
+        <button type="button" id="btnPlaybackLive" class="primary" title="Realtime từ API">Live</button>
+        <button type="button" id="btnPlaybackStep" title="Thêm 1 nến (playback)">+1 nến</button>
+        <button type="button" id="btnPlaybackPlay" title="Tự chạy từng nến">▶ Play</button>
+        <button type="button" id="btnPlaybackPause" title="Dừng auto">⏸ Pause</button>
+        <span class="playback-hint">Click vào nến trên chart để bắt đầu playback từ đó · Màn 1 &amp; 2 đồng bộ thời gian</span>
+      </div>
+      <div class="chart-tv-body">
+        <aside class="chart-tv-sidebar" title="Bật/tắt chỉ báo">
+          <label><input type="checkbox" id="togVolume" checked> Vol</label>
+          <label><input type="checkbox" id="togEma" checked> EMA</label>
+          <label><input type="checkbox" id="togRsi" checked> RSI</label>
+          <label><input type="checkbox" id="togEmaRsi" checked> E↗RSI</label>
+          <label><input type="checkbox" id="togWmaRsi" checked> W↗RSI</label>
+          <label><input type="checkbox" id="togAtr" checked> ATR</label>
+        </aside>
+        <div class="chart-tv-main">
+          <div class="chart-tv-price-wrap">
+            <div class="chart-title" id="chartPriceTitleTv">Giá + Volume (Binance Futures)</div>
+            <div id="chartPriceTv"></div>
+          </div>
+          <div class="chart-tv-ind-wrap">
+            <div class="chart-title">RSI · EMA_RSI · WMA_RSI (0–100)</div>
+            <div id="chartIndicatorTv"></div>
+          </div>
         </div>
-        <div class="chart-indicator-wrap">
-          <div class="chart-title">Chỉ báo: RSI, EMA_RSI, WMA_RSI (0–100) — giá trị bên phải</div>
-          <div id="chartIndicator"></div>
-        </div>
-      </main>
-    </div>
+      </div>
+    </section>
+
+    <!-- Tab 3: Real -->
+    <section id="tab-real" class="tab-panel" role="tabpanel">
+      <div class="tab-real-placeholder">
+        <h2>Trade realtime (tài khoản thật)</h2>
+        <p>Kết nối API Binance Futures, theo dõi vị thế và lệnh thật.</p>
+        <span class="badge">Sắp cập nhật</span>
+      </div>
+    </section>
   </div>
 
-  <script>
-(function() {
-  const INTERVAL_MS = 5000;
-  const ORDERS_REFRESH_MS = 1000;
-  let chartPrice = null, chartIndicator = null;
-  let seriesCandle = null, seriesEma = null, seriesVolume = null;
-  let seriesRsi = null, seriesEmaRsi = null, seriesWmaRsi = null;
-  let currentTimeframe = '5m';
-  let lastOrders = [];
-  let lastKlines = { ohlc: [], indicators: {} };
-  let hasInitialFit = false;
-  let syncingVisibleRange = false;
-  let lastLogicalRange = null;
-
-  const capitalInput = document.getElementById('initial_capital');
-  const statusBadge = document.getElementById('statusBadge');
-  const timeframeSelect = document.getElementById('timeframe');
-  const ordersBody = document.getElementById('ordersBody');
-  const chartPriceTitle = document.getElementById('chartPriceTitle');
-  const refreshMsg = document.getElementById('refreshMsg');
-
-  function setStatusBadge(s) {
-    statusBadge.textContent = s;
-    statusBadge.className = 'status-badge ';
-    if (s === 'running') statusBadge.classList.add('status-running');
-    else if (s === 'paused') statusBadge.classList.add('status-paused');
-    else statusBadge.classList.add('status-stopped');
-  }
-
-  function formatDate(x) {
-    if (!x) return '—';
-    try {
-      return new Date(x).toLocaleString('vi-VN', { timeZone: 'Asia/Bangkok', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    } catch(e) { return String(x); }
-  }
-
-  function updateOverview(d) {
-    document.getElementById('statStarted').textContent = 'Bắt đầu: ' + (d.paper_started_at ? formatDate(d.paper_started_at) : '—');
-    document.getElementById('statTradesDone').textContent = 'Lệnh đã hoàn thành: ' + (d.paper_trades_count || 0);
-    document.getElementById('statOrdersOpen').textContent = 'Lệnh_Open: ' + (d.paper_orders_open_count != null ? d.paper_orders_open_count : 0);
-    document.getElementById('statWinrate').textContent = 'Winrate: ' + (d.paper_winrate != null ? d.paper_winrate : 0) + '%';
-    const pnl = d.paper_total_pnl != null ? d.paper_total_pnl : 0;
-    const elPnl = document.getElementById('statPnl');
-    elPnl.textContent = 'PNL: ' + pnl.toFixed(2);
-    elPnl.className = 'stat ' + (pnl >= 0 ? 'positive' : 'negative');
-    const pnlOpen = d.paper_pnl_open != null ? d.paper_pnl_open : 0;
-    const elPnlOpen = document.getElementById('statPnlOpen');
-    elPnlOpen.textContent = 'PNL_Open: ' + pnlOpen.toFixed(2);
-    elPnlOpen.className = 'stat ' + (pnlOpen >= 0 ? 'positive' : 'negative');
-    document.getElementById('statBalance').textContent = 'Vốn: ' + (d.paper_balance != null ? d.paper_balance : 0).toFixed(2);
-    document.getElementById('statCapitalOpen').textContent = 'Capital_Open: ' + (d.paper_capital_open != null ? d.paper_capital_open : d.paper_balance || 0).toFixed(2);
-    setStatusBadge(d.paper_status || 'stopped');
-    var levEl = document.getElementById('inputLeverage');
-    var pctEl = document.getElementById('inputWalletPct');
-    if (levEl != null) levEl.value = d.paper_leverage_display != null ? Number(d.paper_leverage_display) : 20;
-    if (pctEl != null) pctEl.value = d.paper_wallet_pct_display != null ? (Number(d.paper_wallet_pct_display) * 100) : 30;
-  }
-
-  function fetchOrders() {
-    fetch('/api/orders').then(r => r.json()).then(data => {
-      const orders = data.orders || [];
-      lastOrders = orders;
-      ordersBody.innerHTML = orders.map((o, idx) => {
-        const pnl = o.pnl != null ? o.pnl : 0;
-        const rowClass = pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
-        const pnlClass = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-        const pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
-        // % PnL = PnL / vốn lệnh (margin, 300u) = 40/300 ≈ 13.33%; % PnL vốn = PnL / tổng vốn (capital)
-        const pctVal = o.pct_pnl != null ? Number(o.pct_pnl) : null;
-        const pctPnl = pctVal != null ? ((pctVal >= 0 ? '+' : '') + pctVal.toFixed(2) + '%') : '—';
-        const pctCapVal = o.pct_pnl_capital != null ? Number(o.pct_pnl_capital) : null;
-        const pctPnlCapital = pctCapVal != null ? ((pctCapVal >= 0 ? '+' : '') + pctCapVal.toFixed(2) + '%') : '—';
-        const capAfter = o.capital_after != null ? Number(o.capital_after).toFixed(2) : '—';
-        const id = o.is_open ? '•' : (o.id != null ? o.id : idx + 1);
-        const actionCell = o.is_open
-          ? '<td><button type="button" class="btn-close-order" data-open="1">Chốt lệnh</button></td>'
-          : '<td></td>';
-        return '<tr class="' + rowClass + '"><td>' + id + '</td><td>' + (o.symbol || '') + '</td><td>' + (o.side || '') + (o.is_open ? ' (mở)' : '') +
-          '</td><td>' + formatDate(o.entry_time) + '</td><td>' + (o.entry_price != null ? Number(o.entry_price).toFixed(2) : '') +
-          '</td><td>' + formatDate(o.exit_time) + '</td><td>' + (o.exit_price != null ? Number(o.exit_price).toFixed(2) : '') +
-          '</td><td class="' + pnlClass + '">' + pnlStr + '</td><td class="' + pnlClass + '">' + pctPnl + '</td><td class="' + pnlClass + '">' + pctPnlCapital + '</td><td>' + capAfter + '</td><td>' + (o.exit_reason || '—') + '</td>' + actionCell + '</tr>';
-      }).join('');
-      ordersBody.querySelectorAll('.btn-close-order').forEach(btn => {
-        btn.addEventListener('click', () => {
-          if (!confirm('Chốt lệnh đang mở?')) return;
-          fetch('/api/paper/close', { method: 'POST' }).then(r => r.json()).then(d => {
-            if (d.ok) { refresh(); } else { alert(d.error || 'Lỗi'); }
-          }).catch(() => alert('Lỗi kết nối'));
-        });
-      });
-      fetch('/api/status').then(r => r.json()).then(updateOverview).catch(() => {});
-    }).catch(() => {});
-  }
-
-  // Chart trục thời gian: luôn hiển thị giờ GMT+7. Nếu máy đang UTC thì cộng 7h để nhãn đúng.
-  const GMT7_OFFSET_SEC = 7 * 3600;
-  const isBrowserUTC = (function() {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone !== 'Asia/Bangkok';
-    } catch (e) { return true; }
-  })();
-  function toChartTime(isoStr) {
-    if (!isoStr) return null;
-    const d = new Date(isoStr);
-    let sec = Math.floor(d.getTime() / 1000);
-    if (isBrowserUTC) sec += GMT7_OFFSET_SEC;
-    return sec;
-  }
-
-  function buildMarkers(orders) {
-    const markers = [];
-    (orders || []).forEach(o => {
-      const tEntry = o.entry_time ? toChartTime(o.entry_time) : null;
-      if (tEntry) markers.push({ time: tEntry, position: o.side === 'LONG' ? 'belowBar' : 'aboveBar', color: o.side === 'LONG' ? '#26a69a' : '#ef5350', shape: 'arrowUp', text: 'Vào' });
-      const tExit = o.exit_time ? toChartTime(o.exit_time) : null;
-      if (tExit) markers.push({ time: tExit, position: o.side === 'LONG' ? 'aboveBar' : 'belowBar', color: '#787b86', shape: 'arrowDown', text: 'Ra' });
-    });
-    return markers;
-  }
-
-  function fetchKlines(forceFitContent) {
-    const interval = timeframeSelect.value;
-    const timeframeChanged = interval !== currentTimeframe;
-    currentTimeframe = interval;
-    if (chartPrice && !forceFitContent && !timeframeChanged) {
-      try {
-        const lr = chartPrice.timeScale().getVisibleLogicalRange();
-        if (lr && lr.from != null && lr.to != null) lastLogicalRange = { from: lr.from, to: lr.to };
-      } catch (e) { lastLogicalRange = null; }
-    } else if (timeframeChanged) {
-      lastLogicalRange = null;
-    }
-    fetch('/api/klines?interval=' + encodeURIComponent(interval) + '&limit=500')
-      .then(r => r.json())
-      .then(data => {
-        lastKlines = data;
-        const ohlc = data.ohlc || [];
-        chartPriceTitle.textContent = 'Giá ' + (data.symbol || '') + ' ' + interval;
-        if (!ohlc.length) return;
-        const candleData = ohlc.map(c => ({ time: toChartTime(c.time), open: c.open, high: c.high, low: c.low, close: c.close }));
-        const volumeData = ohlc.map(c => ({
-          time: toChartTime(c.time),
-          value: c.volume != null ? c.volume : 0,
-          color: c.close >= c.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)'
-        })).filter(x => x.time != null && x.value > 0);
-        const ind = data.indicators || {};
-        const times = ind.times || ohlc.map(c => c.time);
-        if (seriesCandle) { seriesCandle.setData(candleData); seriesCandle.setMarkers(buildMarkers(lastOrders)); }
-        if (seriesVolume && volumeData.length) seriesVolume.setData(volumeData);
-        if (seriesEma && ind.EMA && ind.EMA.length) {
-          seriesEma.setData(times.map((t, i) => ({ time: toChartTime(t), value: ind.EMA[i] })).filter(x => x.time));
-        }
-        if (chartIndicator && ind.RSI && ind.RSI.length) {
-          const rsiData = times.map((t, i) => ({ time: toChartTime(t), value: ind.RSI[i] })).filter(x => x.time != null);
-          const emaRsiData = (ind.EMA_RSI || []).length ? times.map((t, i) => ({ time: toChartTime(t), value: ind.EMA_RSI[i] })).filter(x => x.time != null) : [];
-          const wmaRsiData = (ind.WMA_RSI || []).length ? times.map((t, i) => ({ time: toChartTime(t), value: ind.WMA_RSI[i] })).filter(x => x.time != null) : [];
-          if (seriesRsi) seriesRsi.setData(rsiData);
-          if (seriesEmaRsi && emaRsiData.length) seriesEmaRsi.setData(emaRsiData);
-          if (seriesWmaRsi && wmaRsiData.length) seriesWmaRsi.setData(wmaRsiData);
-        }
-        if (chartPrice && (forceFitContent || timeframeChanged || !hasInitialFit)) {
-          chartPrice.timeScale().fitContent();
-          if (chartIndicator) chartIndicator.timeScale().fitContent();
-          hasInitialFit = true;
-        } else if (chartPrice && lastLogicalRange && lastLogicalRange.from != null && lastLogicalRange.to != null) {
-          try {
-            chartPrice.timeScale().setVisibleLogicalRange(lastLogicalRange);
-            if (chartIndicator) chartIndicator.timeScale().setVisibleLogicalRange(lastLogicalRange);
-          } catch (e) {}
-        }
-      }).catch(() => {});
-  }
-
-  function getValueAtTime(time) {
-    if (!lastKlines || !lastKlines.ohlc || !lastKlines.ohlc.length) return null;
-    const ohlc = lastKlines.ohlc;
-    const ind = lastKlines.indicators || {};
-    const t = typeof time === 'number' ? time : (typeof time === 'string' ? toChartTime(time) : null);
-    if (t == null) return null;
-    for (let i = 0; i < ohlc.length; i++) {
-      if (toChartTime(ohlc[i].time) === t) {
-        const close = ohlc[i].close != null ? Number(ohlc[i].close) : null;
-        const rsi = (ind.RSI && ind.RSI[i] != null) ? Number(ind.RSI[i]) : null;
-        return { close: close, rsi: rsi, time: t };
-      }
-    }
-    var best = null, bestDiff = Infinity;
-    for (let i = 0; i < ohlc.length; i++) {
-      const ct = toChartTime(ohlc[i].time);
-      const d = Math.abs(ct - t);
-      if (d < bestDiff) { bestDiff = d; best = { close: Number(ohlc[i].close), rsi: (ind.RSI && ind.RSI[i] != null) ? Number(ind.RSI[i]) : null, time: ct }; }
-    }
-    return best;
-  }
-
-  function initCharts() {
-    const rightOffset = 20;
-    const opts = {
-      layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
-      grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
-      width: document.getElementById('chartPrice').clientWidth,
-      height: document.getElementById('chartPrice').clientHeight,
-      handleScale: { mouseWheel: true, axisPressedMouseMove: false, pinch: false },
-      timeScale: {
-        timeVisible: true,
-        secondsVisible: false,
-        rightOffset: rightOffset,
-        lockVisibleTimeRangeOnResize: false,
-        rightBarStaysOnScroll: true,
-        shiftVisibleRangeOnNewBar: false,
-        minBarSpacing: 0.5,
-      },
-      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.2 }, borderVisible: true },
-    };
-    chartPrice = LightweightCharts.createChart(document.getElementById('chartPrice'), opts);
-    seriesCandle = chartPrice.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false });
-    seriesCandle.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.35 } });
-    seriesEma = chartPrice.addLineSeries({ color: '#f2a900', lineWidth: 2 });
-    seriesVolume = chartPrice.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '' });
-    seriesVolume.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 }, borderVisible: false });
-    chartPrice.timeScale().fitContent();
-
-    const optsInd = {
-      layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
-      grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
-      width: document.getElementById('chartIndicator').clientWidth,
-      height: document.getElementById('chartIndicator').clientHeight,
-      handleScale: { mouseWheel: true, axisPressedMouseMove: false, pinch: false },
-      timeScale: {
-        timeVisible: true,
-        rightOffset: rightOffset,
-        lockVisibleTimeRangeOnResize: false,
-        rightBarStaysOnScroll: true,
-        shiftVisibleRangeOnNewBar: false,
-        minBarSpacing: 0.5,
-      },
-      rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
-    };
-    chartIndicator = LightweightCharts.createChart(document.getElementById('chartIndicator'), optsInd);
-    seriesRsi = chartIndicator.addLineSeries({ color: '#e0e0e0', lineWidth: 2 });
-    seriesEmaRsi = chartIndicator.addLineSeries({ color: '#26a69a', lineWidth: 2 });
-    seriesWmaRsi = chartIndicator.addLineSeries({ color: '#ef5350', lineWidth: 2 });
-    chartIndicator.timeScale().fitContent();
-
-    chartPrice.timeScale().subscribeVisibleTimeRangeChange(() => {
-      if (syncingVisibleRange) return;
-      const range = chartPrice.timeScale().getVisibleRange();
-      if (!range || !chartIndicator) return;
-      syncingVisibleRange = true;
-      try {
-        chartIndicator.timeScale().setVisibleRange(range);
-      } catch (e) {}
-      syncingVisibleRange = false;
-    });
-    chartIndicator.timeScale().subscribeVisibleTimeRangeChange(() => {
-      if (syncingVisibleRange) return;
-      const range = chartIndicator.timeScale().getVisibleRange();
-      if (!range || !chartPrice) return;
-      syncingVisibleRange = true;
-      try {
-        chartPrice.timeScale().setVisibleRange(range);
-      } catch (e) {}
-      syncingVisibleRange = false;
-    });
-
-    function getCrosshairPoint(series, param) {
-      if (!param || param.time == null) return null;
-      var pt = param.seriesData && param.seriesData.get(series);
-      if (!pt) return null;
-      var v = pt.close != null ? pt.close : pt.value;
-      return (v != null && Number.isFinite(v)) ? { time: param.time, value: v } : null;
-    }
-    function setOtherCrosshair(fromPrice, time, value) {
-      if (fromPrice && chartIndicator && seriesRsi && value != null && Number.isFinite(value)) {
-        try { chartIndicator.setCrosshairPosition(value, time, seriesRsi); } catch (e) {}
-      } else if (fromPrice && chartIndicator) {
-        try { chartIndicator.clearCrosshairPosition(); } catch (e) {}
-      } else if (!fromPrice && chartPrice && seriesCandle && value != null && Number.isFinite(value)) {
-        try { chartPrice.setCrosshairPosition(value, time, seriesCandle); } catch (e) {}
-      } else if (!fromPrice && chartPrice) {
-        try { chartPrice.clearCrosshairPosition(); } catch (e) {}
-      }
-    }
-    chartPrice.subscribeCrosshairMove(function(param) {
-      var pt = getCrosshairPoint(seriesCandle, param);
-      if (pt) {
-        var at = getValueAtTime(pt.time);
-        if (at && at.rsi != null) setOtherCrosshair(true, pt.time, at.rsi);
-        else setOtherCrosshair(true, pt.time, null);
-      } else {
-        if (chartIndicator) try { chartIndicator.clearCrosshairPosition(); } catch (e) {}
-      }
-    });
-    chartIndicator.subscribeCrosshairMove(function(param) {
-      var pt = getCrosshairPoint(seriesRsi, param);
-      if (pt) {
-        var at = getValueAtTime(pt.time);
-        if (at && at.close != null) setOtherCrosshair(false, pt.time, at.close);
-        else setOtherCrosshair(false, pt.time, null);
-      } else {
-        if (chartPrice) try { chartPrice.clearCrosshairPosition(); } catch (e) {}
-      }
-    });
-  }
-
-  function refresh() {
-    fetch('/api/status').then(r => r.json()).then(d => {
-      updateOverview(d);
-      fetchOrders();
-    }).catch(() => {});
-  }
-
-  function resizeCharts() {
-    if (chartPrice) chartPrice.applyOptions({ width: document.getElementById('chartPrice').clientWidth, height: document.getElementById('chartPrice').clientHeight });
-    if (chartIndicator) chartIndicator.applyOptions({ width: document.getElementById('chartIndicator').clientWidth, height: document.getElementById('chartIndicator').clientHeight });
-  }
-
-  document.getElementById('btnStart').addEventListener('click', () => {
-    const cap = parseFloat(capitalInput.value);
-    if (!(cap > 0)) { alert('Nhập vốn > 0'); return; }
-    fetch('/api/paper/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initial_capital: cap }) })
-      .then(r => r.json()).then(d => { if (d.ok) refresh(); else alert(d.error || 'Lỗi'); });
-  });
-  document.getElementById('btnPause').addEventListener('click', () => {
-    fetch('/api/paper/pause', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
-  });
-  document.getElementById('btnExportCsv').addEventListener('click', () => {
-    window.location.href = '/api/export/csv';
-  });
-
-  document.getElementById('btnStop').addEventListener('click', () => {
-    fetch('/api/paper/stop', { method: 'POST' }).then(r => r.json()).then(d => { if (d.ok) refresh(); });
-  });
-  document.getElementById('btnClearHistory').addEventListener('click', () => {
-    if (!confirm('Xóa toàn bộ lịch sử lệnh? Vốn và trạng thái sẽ reset. Bạn có chắc?')) return;
-    fetch('/api/paper/clear-history', { method: 'POST' }).then(r => r.json()).then(d => {
-      if (d.ok) { refresh(); alert(d.message || 'Đã xóa toàn bộ lịch sử lệnh.'); }
-      else alert(d.error || 'Lỗi');
-    }).catch(() => alert('Lỗi kết nối'));
-  });
-  document.getElementById('btnCapitalRules').addEventListener('click', () => {
-    var lev = parseFloat(document.getElementById('inputLeverage').value);
-    var pct = parseFloat(document.getElementById('inputWalletPct').value);
-    if (isNaN(lev) || lev < 1 || lev > 125) { alert('Đòn bẩy phải từ 1 đến 125'); return; }
-    if (isNaN(pct) || pct < 1 || pct > 100) { alert('% vốn vào lệnh phải từ 1 đến 100'); return; }
-    fetch('/api/paper/capital-rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leverage: lev, wallet_pct: pct / 100 })
-    }).then(r => r.json()).then(d => {
-      if (d.ok) { refresh(); alert('Đã cập nhật quy tắc vốn.'); }
-      else alert(d.error || 'Lỗi');
-    }).catch(() => alert('Lỗi kết nối'));
-  });
-  timeframeSelect.addEventListener('change', () => { fetchKlines(true); });
-
-  window.addEventListener('resize', resizeCharts);
-  function checkRestorePending() {
-    fetch('/api/restore-pending').then(r => r.json()).then(d => {
-      if (d.pending) {
-        const keep = confirm('Vừa load lại code. Có lệnh paper đang mở. Bạn có muốn GIỮ vị thế và tiếp tục? (Cancel = Đóng lệnh và bỏ vị thế)');
-        fetch('/api/restore-choice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keep: keep }) })
-          .then(r => r.json()).then(() => refresh());
-      }
-    }).catch(() => {});
-  }
-
-  refresh();
-  fetchKlines();
-  checkRestorePending();
-  setInterval(refresh, INTERVAL_MS);
-  setInterval(fetchOrders, ORDERS_REFRESH_MS);
-  setInterval(fetchKlines, INTERVAL_MS);
-  setTimeout(() => { initCharts(); fetchKlines(true); resizeCharts(); }, 100);
-})();
-  </script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>
 </html>
