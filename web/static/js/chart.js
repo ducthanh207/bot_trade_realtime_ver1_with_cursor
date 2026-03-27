@@ -21,13 +21,23 @@
   }
 
   let lastOrders = [];
+  let lastOrdersJson = "";
   function fetchOrdersForMarkers() {
     fetch("/api/orders")
       .then(function (r) {
         return r.json();
       })
       .then(function (data) {
-        lastOrders = data.orders || [];
+        var orders = data.orders || [];
+        var j = "";
+        try {
+          j = JSON.stringify(orders);
+        } catch (e) {
+          j = String(Math.random());
+        }
+        if (j === lastOrdersJson) return;
+        lastOrdersJson = j;
+        lastOrders = orders;
         if (typeof applyMarkersTv === "function") applyMarkersTv();
       })
       .catch(function () {});
@@ -152,11 +162,14 @@
       var ohlc = fullKlinePayload.ohlc;
       var n = ohlc.length;
       var lastBarTime = toChartTime(ohlc[n - 1].time);
-      var atRight = false;
-      if (lr && lr.to != null && n > 0) {
-        atRight = lr.to >= n - 2;
-      }
-      return { from: from, to: to, atRight: atRight, lastBarTime: lastBarTime };
+      return {
+        from: from,
+        to: to,
+        lastBarTime: lastBarTime,
+        logicalFrom: lr && lr.from != null ? lr.from : null,
+        logicalTo: lr && lr.to != null ? lr.to : null,
+        barCount: n,
+      };
     } catch (e) {
       return null;
     }
@@ -167,28 +180,44 @@
     var snap = pendingViewSnapshot;
     pendingViewSnapshot = null;
     if (!snap) return;
-    var t0 = toChartTime(ohlc[0].time);
-    var t1 = toChartTime(ohlc[ohlc.length - 1].time);
+    var n = ohlc.length;
 
-    requestAnimationFrame(function () {
+    function applyRestore() {
       try {
         if (playbackIndex !== null) return;
+
+        if (snap.logicalFrom != null && snap.logicalTo != null) {
+          var lf = Math.max(0, Math.min(n - 1, snap.logicalFrom));
+          var lt = Math.max(0, Math.min(n - 1, snap.logicalTo));
+          if (lf < lt) {
+            runWithTimeSyncSuppressed(function () {
+              try {
+                chartPrice.timeScale().setVisibleLogicalRange({ from: lf, to: lt });
+                if (chartIndicator) chartIndicator.timeScale().setVisibleLogicalRange({ from: lf, to: lt });
+              } catch (e1) {}
+            });
+            return;
+          }
+        }
+
+        var t0 = toChartTime(ohlc[0].time);
+        var t1 = toChartTime(ohlc[ohlc.length - 1].time);
         var from = snap.from;
         var to = snap.to;
-        var t1Old = snap.lastBarTime;
-        if (snap.atRight && t1Old != null && t1 > t1Old) {
-          var dt = t1 - t1Old;
-          from = from + dt;
-          to = to + dt;
-        }
-        from = Math.max(t0, from);
+        from = Math.max(t0, Math.min(t1, from));
         to = Math.max(from + 1, Math.min(t1, to));
         if (from >= to) return;
         runWithTimeSyncSuppressed(function () {
-          chartPrice.timeScale().setVisibleRange({ from: from, to: to });
-          if (chartIndicator) chartIndicator.timeScale().setVisibleRange({ from: from, to: to });
+          try {
+            chartPrice.timeScale().setVisibleRange({ from: from, to: to });
+            if (chartIndicator) chartIndicator.timeScale().setVisibleRange({ from: from, to: to });
+          } catch (e2) {}
         });
       } catch (e) {}
+    }
+
+    queueMicrotask(function () {
+      queueMicrotask(applyRestore);
     });
   }
 
