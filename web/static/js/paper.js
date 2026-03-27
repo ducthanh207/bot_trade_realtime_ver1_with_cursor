@@ -67,16 +67,22 @@
     setStatusBadge(field(d, "status") || "stopped");
     var levEl = document.getElementById("inputLeverage");
     var pctEl = document.getElementById("inputWalletPct");
-    if (levEl != null)
+    var lbEl = document.getElementById("inputPctLookback");
+    var ae = document.activeElement;
+    // Không ghi đè ô đang gõ (poll trước đây mỗi 1s khiến không sửa được lookback / vốn)
+    if (levEl != null && ae !== levEl)
       levEl.value = field(d, "leverage_display") != null ? Number(field(d, "leverage_display")) : 20;
-    if (pctEl != null)
+    if (pctEl != null && ae !== pctEl)
       pctEl.value =
         field(d, "wallet_pct_display") != null ? Number(field(d, "wallet_pct_display")) * 100 : 30;
-    var lbEl = document.getElementById("inputPctLookback");
-    if (lbEl != null) {
+    if (lbEl != null && ae !== lbEl) {
       var lbv = field(d, "lookback_display");
-      lbEl.value =
-        lbv != null && lbv !== "" ? String(Math.min(200, Math.max(1, parseInt(String(lbv), 10) || 15))) : "15";
+      if (lbv != null && lbv !== "") {
+        var n = parseInt(String(lbv), 10);
+        if (!isNaN(n)) lbEl.value = String(Math.min(200, Math.max(1, n)));
+      } else {
+        lbEl.value = "15";
+      }
     }
   }
 
@@ -160,12 +166,6 @@
               });
           });
         });
-        fetch("/api/status")
-          .then(function (r) {
-            return r.json();
-          })
-          .then(updateOverview)
-          .catch(function () {});
       })
       .catch(function () {});
   }
@@ -257,6 +257,9 @@
         })
         .then(function (res) {
           if (res.ok) {
+            var el = document.getElementById("inputPctLookback");
+            if (el != null && res.paper2_lookback_trades != null)
+              el.value = String(res.paper2_lookback_trades);
             refresh();
             alert(res.message || "Đã lưu chiến lược.");
           } else alert(res.error || "Lỗi");
