@@ -59,6 +59,18 @@
     return null;
   }
 
+  /** Tránh setVisibleRange ping-pong giữa 2 chart (gây giật trái/phải khi zoom/pan). */
+  function visibleRangeNearlyEqual(a, b) {
+    if (!a || !b) return false;
+    var af = toUnixSeconds(a.from);
+    var at = toUnixSeconds(a.to);
+    var bf = toUnixSeconds(b.from);
+    var bt = toUnixSeconds(b.to);
+    if (af == null || at == null || bf == null || bt == null) return false;
+    var eps = 1;
+    return Math.abs(af - bf) <= eps && Math.abs(at - bt) <= eps;
+  }
+
   function estimateAvgBarSec(ohlc) {
     if (!ohlc || ohlc.length < 2) return 300;
     var sum = 0;
@@ -174,8 +186,6 @@
   let seriesPctUpper = null;
   let seriesPctMid = null;
   let seriesPctLower = null;
-  let tradeVlinesEl = null;
-  let lastPctTrades = [];
   let currentTimeframeTv = "5m";
   let tvChartsInited = false;
   let hasInitialFit = false;
@@ -403,36 +413,6 @@
     statEl.textContent = t;
   }
 
-  function updatePctTradeVlines() {
-    if (!tradeVlinesEl || !chartPrice) return;
-    tradeVlinesEl.innerHTML = "";
-    const ts = chartPrice.timeScale();
-    for (let ti = 0; ti < lastPctTrades.length; ti++) {
-      const t = lastPctTrades[ti];
-      const pairs = [
-        [t.entry_time, "#26a69a"],
-        [t.exit_time, "#78909c"],
-      ];
-      for (let pi = 0; pi < pairs.length; pi++) {
-        const iso = pairs[pi][0];
-        const color = pairs[pi][1];
-        if (!iso) continue;
-        const tm = typeof iso === "number" ? iso : toChartTime(iso);
-        if (!tm) continue;
-        const x = ts.timeToCoordinate(tm);
-        if (x == null || x === undefined || !Number.isFinite(x)) continue;
-        const line = document.createElement("div");
-        line.style.cssText =
-          "position:absolute;top:0;bottom:0;width:0;border-left:1px dashed " +
-          color +
-          ";left:" +
-          x +
-          "px;opacity:0.85;";
-        tradeVlinesEl.appendChild(line);
-      }
-    }
-  }
-
   function renderPayloadToCharts(data, opts) {
     opts = opts || {};
     const forceFit = opts.forceFit === true;
@@ -448,9 +428,7 @@
       chartPriceTitleTv.textContent =
         "Không có nến — kiểm tra kết nối API / Binance · " + (data.symbol || "") + " " + interval;
       pendingViewSnapshot = null;
-      lastPctTrades = [];
       updateChartPctStat(null);
-      if (tradeVlinesEl) tradeVlinesEl.innerHTML = "";
       if (seriesPctUpper) {
         seriesPctUpper.setData([]);
         seriesPctMid.setData([]);
@@ -522,13 +500,11 @@
       seriesPctUpper.setData(mapPctLine(L.upper));
       seriesPctMid.setData(mapPctLine(L.mid));
       seriesPctLower.setData(mapPctLine(L.lower));
-      lastPctTrades = Array.isArray(pc.trades) ? pc.trades : [];
       updateChartPctStat(pc);
     } else if (seriesPctUpper) {
       seriesPctUpper.setData([]);
       seriesPctMid.setData([]);
       seriesPctLower.setData([]);
-      lastPctTrades = [];
       updateChartPctStat(null);
     }
 
@@ -579,7 +555,6 @@
 
     requestAnimationFrame(function () {
       updateLegendFromCrosshairParam({ time: null });
-      updatePctTradeVlines();
     });
   }
 
@@ -688,7 +663,7 @@
       width: document.getElementById("chartPriceTv").clientWidth,
       height: document.getElementById("chartPriceTv").clientHeight,
       crosshair: crosshairOpts,
-      kineticScroll: { mouse: true, touch: true },
+      kineticScroll: { mouse: false, touch: false },
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: true,
@@ -747,24 +722,13 @@
       visible: false,
     });
 
-    tradeVlinesEl = document.createElement("div");
-    tradeVlinesEl.id = "pctChangeTradeVlines";
-    tradeVlinesEl.setAttribute("aria-hidden", "true");
-    tradeVlinesEl.style.cssText =
-      "position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:10;overflow:hidden;";
-    var chartPriceHost = document.getElementById("chartPriceTv");
-    if (chartPriceHost) {
-      chartPriceHost.style.position = "relative";
-      chartPriceHost.appendChild(tradeVlinesEl);
-    }
-
     const optsInd = {
       layout: { background: { type: "solid", color: "#131722" }, textColor: "#d1d4dc" },
       grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
       width: document.getElementById("chartIndicatorTv").clientWidth,
       height: document.getElementById("chartIndicatorTv").clientHeight,
       crosshair: crosshairOpts,
-      kineticScroll: { mouse: true, touch: true },
+      kineticScroll: { mouse: false, touch: false },
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: true,
@@ -791,12 +755,16 @@
         syncRangeFromPriceRaf = null;
         const range = chartPrice.timeScale().getVisibleRange();
         if (!range || !chartIndicator) return;
+        var peerRange = null;
+        try {
+          peerRange = chartIndicator.timeScale().getVisibleRange();
+        } catch (e2) {}
+        if (peerRange && visibleRangeNearlyEqual(peerRange, range)) return;
         syncingVisibleRange = true;
         try {
           chartIndicator.timeScale().setVisibleRange(range);
         } catch (e) {}
         syncingVisibleRange = false;
-        updatePctTradeVlines();
       });
     });
     chartIndicator.timeScale().subscribeVisibleTimeRangeChange(function () {
@@ -806,12 +774,16 @@
         syncRangeFromIndRaf = null;
         const range = chartIndicator.timeScale().getVisibleRange();
         if (!range || !chartPrice) return;
+        var peerRange = null;
+        try {
+          peerRange = chartPrice.timeScale().getVisibleRange();
+        } catch (e2) {}
+        if (peerRange && visibleRangeNearlyEqual(peerRange, range)) return;
         syncingVisibleRange = true;
         try {
           chartPrice.timeScale().setVisibleRange(range);
         } catch (e) {}
         syncingVisibleRange = false;
-        updatePctTradeVlines();
       });
     });
 
@@ -902,7 +874,6 @@
         seriesPctMid.applyOptions({ visible: pchg });
         seriesPctLower.applyOptions({ visible: pchg });
       }
-      if (tradeVlinesEl) tradeVlinesEl.style.display = pchg ? "" : "none";
       if (seriesAtr) seriesAtr.applyOptions({ visible: a });
       try {
         if (chartPrice) chartPrice.priceScale("atr").applyOptions({ visible: a });
@@ -932,7 +903,6 @@
         if (chartIndicator) chartIndicator.timeScale().applyOptions({ rightOffset: ro });
       } catch (e) {}
     }
-    updatePctTradeVlines();
   }
 
   window.addEventListener("resize", function () {
