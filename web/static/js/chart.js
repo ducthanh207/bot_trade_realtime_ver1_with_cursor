@@ -99,6 +99,28 @@
     }
   }
 
+  /** Khoảng trống bên phải (đơn vị “nến”) giống Binance/TradingView — không dán nến mới vào mép phải. */
+  function computeRightOffsetBars() {
+    var el = document.getElementById("chartPriceTv");
+    var w = el ? el.clientWidth : 900;
+    var barW = 6;
+    var target = Math.floor((w * 0.45) / barW);
+    return Math.max(48, Math.min(140, target));
+  }
+
+  function applyTradingViewEndScroll() {
+    if (!chartPrice) return;
+    var ro = computeRightOffsetBars();
+    try {
+      chartPrice.timeScale().applyOptions({ rightOffset: ro, barSpacing: 6 });
+      chartPrice.timeScale().scrollToRealTime();
+      if (chartIndicator) {
+        chartIndicator.timeScale().applyOptions({ rightOffset: ro, barSpacing: 6 });
+        chartIndicator.timeScale().scrollToRealTime();
+      }
+    } catch (e) {}
+  }
+
   function restoreAfterDataUpdate(ohlc) {
     if (!chartPrice || !ohlc || !ohlc.length) return;
     var snap = pendingViewSnapshot;
@@ -114,8 +136,7 @@
         try {
           if (playbackIndex !== null) return;
           if (snap.atRight) {
-            chartPrice.timeScale().scrollToRealTime();
-            if (chartIndicator) chartIndicator.timeScale().scrollToRealTime();
+            applyTradingViewEndScroll();
             return;
           }
           var from = snap.from;
@@ -128,8 +149,7 @@
           from = Math.max(t0, Math.min(from, t1));
           to = Math.max(t0, Math.min(to, t1));
           if (from >= to) {
-            chartPrice.timeScale().fitContent();
-            if (chartIndicator) chartIndicator.timeScale().fitContent();
+            applyTradingViewEndScroll();
             return;
           }
           chartPrice.timeScale().setVisibleRange({ from: from, to: to });
@@ -281,17 +301,6 @@
           })
       );
     }
-    if (seriesAtr && ind.ATR && ind.ATR.length) {
-      seriesAtr.setData(
-        times
-          .map(function (t, i) {
-            return { time: toChartTime(t), value: ind.ATR[i] };
-          })
-          .filter(function (x) {
-            return x.time;
-          })
-      );
-    }
     if (chartIndicator && ind.RSI && ind.RSI.length) {
       const rsiData = times
         .map(function (t, i) {
@@ -322,17 +331,33 @@
       if (seriesEmaRsi && emaRsiData.length) seriesEmaRsi.setData(emaRsiData);
       if (seriesWmaRsi && wmaRsiData.length) seriesWmaRsi.setData(wmaRsiData);
     }
+    if (chartIndicator && seriesAtr && ind.ATR && ind.ATR.length) {
+      seriesAtr.setData(
+        times
+          .map(function (t, i) {
+            return { time: toChartTime(t), value: ind.ATR[i] };
+          })
+          .filter(function (x) {
+            return x.time != null;
+          })
+      );
+    }
 
     if (playbackIndex !== null) {
-      chartPrice.timeScale().fitContent();
-      if (chartIndicator) chartIndicator.timeScale().fitContent();
+      try {
+        chartPrice.timeScale().applyOptions({ rightOffset: 28, barSpacing: 6 });
+        chartPrice.timeScale().scrollToRealTime();
+        if (chartIndicator) {
+          chartIndicator.timeScale().applyOptions({ rightOffset: 28, barSpacing: 6 });
+          chartIndicator.timeScale().scrollToRealTime();
+        }
+      } catch (e) {}
       return;
     }
 
     if (chartPrice && (forceFit || timeframeChanged || !hasInitialFit)) {
-      chartPrice.timeScale().fitContent();
-      if (chartIndicator) chartIndicator.timeScale().fitContent();
       hasInitialFit = true;
+      applyTradingViewEndScroll();
     } else if (chartPrice) {
       restoreAfterDataUpdate(ohlc);
     }
@@ -405,7 +430,7 @@
   }
 
   function initChartsTv() {
-    const rightOffset = 12;
+    const rightOffset = computeRightOffsetBars();
     const opts = {
       layout: { background: { type: "solid", color: "#131722" }, textColor: "#d1d4dc" },
       grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
@@ -428,12 +453,11 @@
         rightOffset: rightOffset,
         lockVisibleTimeRangeOnResize: true,
         rightBarStaysOnScroll: true,
-        shiftVisibleRangeOnNewBar: false,
+        shiftVisibleRangeOnNewBar: true,
         minBarSpacing: 0.8,
         barSpacing: 6,
       },
       rightPriceScale: { scaleMargins: { top: 0.08, bottom: 0.22 }, borderVisible: true },
-      leftPriceScale: { visible: true, borderVisible: true },
     };
     chartPrice = LightweightCharts.createChart(document.getElementById("chartPriceTv"), opts);
     seriesCandle = chartPrice.addCandlestickSeries({
@@ -445,20 +469,6 @@
     seriesEma = chartPrice.addLineSeries({ color: "#f2a900", lineWidth: 2 });
     seriesVolume = chartPrice.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "" });
     seriesVolume.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 }, borderVisible: false });
-    seriesAtr = chartPrice.addLineSeries({
-      color: "#ab47bc",
-      lineWidth: 1,
-      priceScaleId: "atr",
-      priceLineVisible: false,
-      lastValueVisible: true,
-    });
-    chartPrice.priceScale("atr").applyOptions({
-      position: "left",
-      autoScale: true,
-      scaleMargins: { top: 0.12, bottom: 0.12 },
-      borderVisible: true,
-      entireTextOnly: false,
-    });
 
     const optsInd = {
       layout: { background: { type: "solid", color: "#131722" }, textColor: "#d1d4dc" },
@@ -481,16 +491,31 @@
         rightOffset: rightOffset,
         lockVisibleTimeRangeOnResize: true,
         rightBarStaysOnScroll: true,
-        shiftVisibleRangeOnNewBar: false,
+        shiftVisibleRangeOnNewBar: true,
         minBarSpacing: 0.8,
         barSpacing: 6,
       },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
+      leftPriceScale: { visible: true, borderVisible: true },
     };
     chartIndicator = LightweightCharts.createChart(document.getElementById("chartIndicatorTv"), optsInd);
     seriesRsi = chartIndicator.addLineSeries({ color: "#e0e0e0", lineWidth: 2 });
     seriesEmaRsi = chartIndicator.addLineSeries({ color: "#26a69a", lineWidth: 2 });
     seriesWmaRsi = chartIndicator.addLineSeries({ color: "#ef5350", lineWidth: 2 });
+    seriesRsi.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: 0.4 } });
+    seriesAtr = chartIndicator.addLineSeries({
+      color: "#ab47bc",
+      lineWidth: 1,
+      priceScaleId: "atr",
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+    chartIndicator.priceScale("atr").applyOptions({
+      position: "left",
+      autoScale: true,
+      scaleMargins: { top: 0.58, bottom: 0.08 },
+      borderVisible: true,
+    });
 
     chartPrice.timeScale().subscribeVisibleTimeRangeChange(function () {
       if (syncingVisibleRange) return;
@@ -611,6 +636,13 @@
     const hi = document.getElementById("chartIndicatorTv").clientHeight;
     if (chartPrice) chartPrice.applyOptions({ width: w, height: h });
     if (chartIndicator) chartIndicator.applyOptions({ width: wi, height: hi });
+    if (playbackIndex === null && chartPrice) {
+      var ro = computeRightOffsetBars();
+      try {
+        chartPrice.timeScale().applyOptions({ rightOffset: ro });
+        if (chartIndicator) chartIndicator.timeScale().applyOptions({ rightOffset: ro });
+      } catch (e) {}
+    }
   }
 
   window.addEventListener("resize", function () {
