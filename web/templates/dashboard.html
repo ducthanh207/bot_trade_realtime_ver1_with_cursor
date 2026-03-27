@@ -152,8 +152,7 @@
   let currentTimeframe = '5m';
   let lastOrders = [];
   let lastKlines = { ohlc: [], indicators: {} };
-  let userHasZoomedOrPanned = false;
-  let lastVisibleRange = null;
+  let hasInitialFit = false;
 
   const capitalInput = document.getElementById('initial_capital');
   const statusBadge = document.getElementById('statusBadge');
@@ -265,12 +264,6 @@
     const interval = timeframeSelect.value;
     const timeframeChanged = interval !== currentTimeframe;
     currentTimeframe = interval;
-    if (chartPrice && !forceFitContent && !timeframeChanged) {
-      try {
-        const range = chartPrice.timeScale().getVisibleRange();
-        if (range && range.from != null && range.to != null) lastVisibleRange = { from: range.from, to: range.to };
-      } catch (e) { lastVisibleRange = null; }
-    }
     fetch('/api/klines?interval=' + encodeURIComponent(interval) + '&limit=500')
       .then(r => r.json())
       .then(data => {
@@ -299,18 +292,10 @@
           if (seriesEmaRsi && emaRsiData.length) seriesEmaRsi.setData(emaRsiData);
           if (seriesWmaRsi && wmaRsiData.length) seriesWmaRsi.setData(wmaRsiData);
         }
-        if (chartPrice && (forceFitContent || timeframeChanged)) {
+        if (chartPrice && (forceFitContent || timeframeChanged || !hasInitialFit)) {
           chartPrice.timeScale().fitContent();
           if (chartIndicator) chartIndicator.timeScale().fitContent();
-          userHasZoomedOrPanned = false;
-        } else if (chartPrice && lastVisibleRange && lastVisibleRange.from != null && lastVisibleRange.to != null) {
-          var range = { from: lastVisibleRange.from, to: lastVisibleRange.to };
-          setTimeout(function() {
-            try {
-              chartPrice.timeScale().setVisibleRange(range);
-              if (chartIndicator) chartIndicator.timeScale().setVisibleRange(range);
-            } catch (e) {}
-          }, 0);
+          hasInitialFit = true;
         }
       }).catch(() => {});
   }
@@ -338,7 +323,7 @@
   }
 
   function initCharts() {
-    const rightOffset = 50;
+    const rightOffset = 20;
     const opts = {
       layout: { background: { type: 'solid', color: '#131722' }, textColor: '#d1d4dc' },
       grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
@@ -349,7 +334,8 @@
         timeVisible: true,
         secondsVisible: false,
         rightOffset: rightOffset,
-        lockVisibleTimeRangeOnResize: true,
+        lockVisibleTimeRangeOnResize: false,
+        rightBarStaysOnScroll: true,
         minBarSpacing: 0.5,
       },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.2 }, borderVisible: true },
@@ -371,7 +357,8 @@
       timeScale: {
         timeVisible: true,
         rightOffset: rightOffset,
-        lockVisibleTimeRangeOnResize: true,
+        lockVisibleTimeRangeOnResize: false,
+        rightBarStaysOnScroll: true,
         minBarSpacing: 0.5,
       },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
@@ -383,12 +370,10 @@
     chartIndicator.timeScale().fitContent();
 
     chartPrice.timeScale().subscribeVisibleTimeRangeChange(() => {
-      userHasZoomedOrPanned = true;
       const range = chartPrice.timeScale().getVisibleRange();
       if (range && chartIndicator) chartIndicator.timeScale().setVisibleRange(range);
     });
     chartIndicator.timeScale().subscribeVisibleTimeRangeChange(() => {
-      userHasZoomedOrPanned = true;
       const range = chartIndicator.timeScale().getVisibleRange();
       if (range && chartPrice) chartPrice.timeScale().setVisibleRange(range);
     });
