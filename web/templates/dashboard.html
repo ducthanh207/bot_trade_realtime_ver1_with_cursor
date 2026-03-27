@@ -153,6 +153,8 @@
   let lastOrders = [];
   let lastKlines = { ohlc: [], indicators: {} };
   let hasInitialFit = false;
+  let syncingVisibleRange = false;
+  let lastLogicalRange = null;
 
   const capitalInput = document.getElementById('initial_capital');
   const statusBadge = document.getElementById('statusBadge');
@@ -264,6 +266,14 @@
     const interval = timeframeSelect.value;
     const timeframeChanged = interval !== currentTimeframe;
     currentTimeframe = interval;
+    if (chartPrice && !forceFitContent && !timeframeChanged) {
+      try {
+        const lr = chartPrice.timeScale().getVisibleLogicalRange();
+        if (lr && lr.from != null && lr.to != null) lastLogicalRange = { from: lr.from, to: lr.to };
+      } catch (e) { lastLogicalRange = null; }
+    } else if (timeframeChanged) {
+      lastLogicalRange = null;
+    }
     fetch('/api/klines?interval=' + encodeURIComponent(interval) + '&limit=500')
       .then(r => r.json())
       .then(data => {
@@ -296,6 +306,11 @@
           chartPrice.timeScale().fitContent();
           if (chartIndicator) chartIndicator.timeScale().fitContent();
           hasInitialFit = true;
+        } else if (chartPrice && lastLogicalRange && lastLogicalRange.from != null && lastLogicalRange.to != null) {
+          try {
+            chartPrice.timeScale().setVisibleLogicalRange(lastLogicalRange);
+            if (chartIndicator) chartIndicator.timeScale().setVisibleLogicalRange(lastLogicalRange);
+          } catch (e) {}
         }
       }).catch(() => {});
   }
@@ -336,6 +351,7 @@
         rightOffset: rightOffset,
         lockVisibleTimeRangeOnResize: false,
         rightBarStaysOnScroll: true,
+        shiftVisibleRangeOnNewBar: false,
         minBarSpacing: 0.5,
       },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.2 }, borderVisible: true },
@@ -359,6 +375,7 @@
         rightOffset: rightOffset,
         lockVisibleTimeRangeOnResize: false,
         rightBarStaysOnScroll: true,
+        shiftVisibleRangeOnNewBar: false,
         minBarSpacing: 0.5,
       },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
@@ -370,12 +387,24 @@
     chartIndicator.timeScale().fitContent();
 
     chartPrice.timeScale().subscribeVisibleTimeRangeChange(() => {
+      if (syncingVisibleRange) return;
       const range = chartPrice.timeScale().getVisibleRange();
-      if (range && chartIndicator) chartIndicator.timeScale().setVisibleRange(range);
+      if (!range || !chartIndicator) return;
+      syncingVisibleRange = true;
+      try {
+        chartIndicator.timeScale().setVisibleRange(range);
+      } catch (e) {}
+      syncingVisibleRange = false;
     });
     chartIndicator.timeScale().subscribeVisibleTimeRangeChange(() => {
+      if (syncingVisibleRange) return;
       const range = chartIndicator.timeScale().getVisibleRange();
-      if (range && chartPrice) chartPrice.timeScale().setVisibleRange(range);
+      if (!range || !chartPrice) return;
+      syncingVisibleRange = true;
+      try {
+        chartPrice.timeScale().setVisibleRange(range);
+      } catch (e) {}
+      syncingVisibleRange = false;
     });
 
     function getCrosshairPoint(series, param) {
