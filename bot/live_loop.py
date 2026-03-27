@@ -21,6 +21,8 @@ from strategy import (
     long_exit_early,
     short_exit_early,
     size_and_margin,
+    refresh_atr_from_1h,
+    atr_1h_at_entry,
     check_atr_trailing,
     max_loss_from_capital,
     limit_pnl_and_exit_price,
@@ -68,6 +70,13 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
             # Lấy dữ liệu
             df_4h_raw = client.get_klines_4h(symbol, limit=200)
             df_1m = client.get_klines_1m(symbol, limit=500)
+            df_1h = pd.DataFrame()
+            try:
+                df_1h_raw = client.get_klines_1h(symbol, limit=200)
+                if not df_1h_raw.empty:
+                    df_1h = add_indicators(df_1h_raw)
+            except Exception:
+                df_1h = pd.DataFrame()
             if df_4h_raw.empty or len(df_4h_raw) < 20:
                 time.sleep(settings.LOOP_INTERVAL_SEC)
                 continue
@@ -88,7 +97,7 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
 
             # Nếu sàn có position nhưng state chưa có open_trade (vd bot vừa restart) -> tạo open_trade từ sàn + ATR hiện tại
             if pos_exchange and not open_trade:
-                atr_now = row["ATR"]
+                atr_now = atr_1h_at_entry(df_1h, float(row["ATR"]))
                 entry = pos_exchange["entry_price"]
                 size = pos_exchange["size"]
                 side = pos_exchange["side"]
@@ -122,6 +131,7 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                 last_check = open_trade.get("last_sl_check")
                 if last_check is not None and not df_1m.empty:
                     df_slice = df_1m.loc[df_1m.index >= last_check]
+                    refresh_atr_from_1h(open_trade, df_1h)
                     margin = open_trade["margin"]
                     notional = open_trade["notional"]
                     maint = settings.MAINT_MARGIN_RATE * notional
@@ -213,7 +223,7 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                     if not settings.DRY_RUN:
                         client.set_leverage(symbol, int(settings.LEVERAGE))
                         client.place_market_order(symbol, side, qty, reduce_only=False)
-                    atr_now = row["ATR"]
+                    atr_now = atr_1h_at_entry(df_1h, float(row["ATR"]))
                     trail_dist = atr_now * settings.ATR_MULTIPLIER
                     init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
                     # Lưu entry_4h_ts để tránh early exit ngay trên cùng nến vừa vào (gây loop)

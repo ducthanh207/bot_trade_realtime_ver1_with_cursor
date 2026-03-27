@@ -23,6 +23,8 @@ from strategy import (
     long_exit_early,
     short_exit_early,
     size_and_margin,
+    refresh_atr_from_1h,
+    atr_1h_at_entry,
     check_atr_trailing,
     max_loss_from_capital,
     limit_pnl_and_exit_price,
@@ -118,6 +120,15 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                 df_4h_raw = client.get_klines_4h(symbol, limit=200)
                 df_1m = client.get_klines_1m(symbol, limit=500)
 
+            df_1h = pd.DataFrame()
+            if client.is_connected():
+                try:
+                    df_1h_raw = client.get_klines_1h(symbol, limit=200)
+                    if not df_1h_raw.empty:
+                        df_1h = add_indicators(df_1h_raw)
+                except Exception:
+                    df_1h = pd.DataFrame()
+
             if df_4h_raw.empty or len(df_4h_raw) < 20:
                 time.sleep(settings.LOOP_INTERVAL_SEC)
                 continue
@@ -148,6 +159,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                 last_check = open_trade.get("last_sl_check")
                 if last_check is not None and not df_1m.empty:
                     df_slice = df_1m.loc[df_1m.index >= last_check]
+                    refresh_atr_from_1h(open_trade, df_1h)
                     margin = open_trade["margin"]
                     notional = open_trade["notional"]
                     maint = settings.MAINT_MARGIN_RATE * notional
@@ -263,7 +275,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         continue
                     fee_in = size * entry_px * settings.TAKER_FEE
                     balance_after_fee = balance - fee_in
-                    atr_now = row_closed["ATR"]
+                    atr_now = atr_1h_at_entry(df_1h, float(row_closed["ATR"]))
                     trail_dist = atr_now * settings.ATR_MULTIPLIER
                     init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
                     # Lưu 3 đường lúc vào (chỉ dùng khi xuất CSV, không hiển thị trên UI)

@@ -37,6 +37,62 @@ def _serialize(obj):
     return obj
 
 
+def _float_or_none_api(v):
+    try:
+        x = float(v)
+        if x != x:
+            return None
+        return x
+    except (TypeError, ValueError):
+        return None
+
+
+def _pct_change_bands_to_json(bands):
+    """Chuẩn hóa kết quả build_pct_change_avg_bands cho JSON (giống idea_for_update/api_demo)."""
+    trades = []
+    for t in bands.get("trades", []) or []:
+        trades.append(
+            {
+                "side": t.get("side"),
+                "entry_time": _serialize(t.get("entry_time")),
+                "exit_time": _serialize(t.get("exit_time")),
+                "entry_open": _float_or_none_api(t.get("entry_open")),
+                "exit_close": _float_or_none_api(t.get("exit_close")),
+                "pct_change": _float_or_none_api(t.get("pct_change")),
+            }
+        )
+
+    def _line_to_json(line):
+        out = []
+        for x in line or []:
+            out.append(
+                {
+                    "time": _serialize(x.get("time")),
+                    "value": _float_or_none_api(x.get("value")),
+                }
+            )
+        return out
+
+    lines = bands.get("lines") or {}
+    return {
+        "trade_count": int(bands.get("trade_count", 0)),
+        "avg_signed_pct": _float_or_none_api(bands.get("avg_signed_pct")),
+        "avg_abs_pct": _float_or_none_api(bands.get("avg_abs_pct")),
+        "band_half_width_pct": _float_or_none_api(bands.get("band_half_width_pct")),
+        "band_half_width_usdt": _float_or_none_api(bands.get("band_half_width_usdt")),
+        "current_close": _float_or_none_api(bands.get("current_close")),
+        "upper": _float_or_none_api(bands.get("upper")),
+        "mid": _float_or_none_api(bands.get("mid")),
+        "lower": _float_or_none_api(bands.get("lower")),
+        "lines": {
+            "upper": _line_to_json(lines.get("upper", [])),
+            "mid": _line_to_json(lines.get("mid", [])),
+            "lower": _line_to_json(lines.get("lower", [])),
+        },
+        "trades": trades,
+    }
+
+
 def get_status():
     try:
         from bot import state
@@ -385,19 +441,34 @@ def api_price():
 
 @app.route("/api/klines")
 def api_klines():
-    """Klines + indicators theo interval. interval: 1m, 5m, 15m, 1h, 4h, 1d, 3d."""
+    """Klines + indicators theo interval. interval: 1m, 5m, 15m, 1h, 4h, 1d, 3d. Thêm pct_change (%change)."""
     try:
         from config import settings
         from strategy.indicators import add_indicators
+        from strategy.pct_change_avg import build_pct_change_avg_bands
+
         interval = request.args.get("interval", "5m").strip().lower()
         limit = min(int(request.args.get("limit", 500)), 1000)
         if interval not in ("1m", "5m", "15m", "1h", "4h", "1d", "3d"):
             interval = "5m"
+        try:
+            lookback_trades = int(request.args.get("lookback_trades", 15))
+        except (TypeError, ValueError):
+            lookback_trades = 15
+        lookback_trades = min(max(lookback_trades, 1), 200)
+
         client = _get_client()
         df = client.get_klines(settings.SYMBOL, interval, limit)
         if df.empty:
             return jsonify(
-                {"ohlc": [], "indicators": {}, "interval": interval, "symbol": settings.SYMBOL}
+                {
+                    "ohlc": [],
+                    "indicators": {},
+                    "interval": interval,
+                    "symbol": settings.SYMBOL,
+                    "lookback_trades": lookback_trades,
+                    "pct_change": _pct_change_bands_to_json({}),
+                }
             )
         df = add_indicators(df)
         ohlc = []
@@ -420,7 +491,21 @@ def api_klines():
             "WMA": [round(float(row["WMA"]), 4) for _, row in df.iterrows()],
             "times": [ts.isoformat() if hasattr(ts, "isoformat") else str(ts) for ts in df.index],
         }
-        return jsonify({"ohlc": ohlc, "indicators": indicators, "interval": interval, "symbol": settings.SYMBOL})
+        bands = build_pct_change_avg_bands(
+            df[["open", "high", "low", "close", "volume"]],
+            lookback_trades=lookback_trades,
+        )
+        pct_json = _pct_change_bands_to_json(bands)
+        return jsonify(
+            {
+                "ohlc": ohlc,
+                "indicators": indicators,
+                "interval": interval,
+                "symbol": settings.SYMBOL,
+                "lookback_trades": lookback_trades,
+                "pct_change": pct_json,
+            }
+        )
     except Exception as e:
         sym = ""
         try:
@@ -429,7 +514,15 @@ def api_klines():
             sym = _s.SYMBOL
         except Exception:
             pass
-        return jsonify({"ohlc": [], "indicators": {}, "symbol": sym, "error": str(e)})
+        return jsonify(
+            {
+                "ohlc": [],
+                "indicators": {},
+                "symbol": sym,
+                "error": str(e),
+                "pct_change": _pct_change_bands_to_json({}),
+            }
+        )
 
 
 def _pct_pnl(profit: float, margin: float) -> float:

@@ -171,19 +171,115 @@
   let seriesRsi = null;
   let seriesEmaRsi = null;
   let seriesWmaRsi = null;
+  let seriesPctUpper = null;
+  let seriesPctMid = null;
+  let seriesPctLower = null;
+  let tradeVlinesEl = null;
+  let lastPctTrades = [];
   let currentTimeframeTv = "5m";
   let tvChartsInited = false;
   let hasInitialFit = false;
   let syncingVisibleRange = false;
   let pendingViewSnapshot = null;
+  let syncRangeFromPriceRaf = null;
+  let syncRangeFromIndRaf = null;
+  let resizeDebounceTimer = null;
+
+  const CrosshairModeNormal =
+    typeof LightweightCharts !== "undefined" && LightweightCharts.CrosshairMode != null
+      ? LightweightCharts.CrosshairMode.Normal
+      : 0;
+
+  function formatLegendPx(x) {
+    if (x == null || !Number.isFinite(Number(x))) return "—";
+    return Number(x).toFixed(2);
+  }
+
+  function findOhlcIndexByChartTime(t) {
+    const ohlc = lastRenderedForCrosshair.ohlc || [];
+    for (let i = 0; i < ohlc.length; i++) {
+      if (toChartTime(ohlc[i].time) === t) return i;
+    }
+    return -1;
+  }
+
+  function updateLegendOhlcFromBar(c, timeSec) {
+    const legO = document.getElementById("legO");
+    const legH = document.getElementById("legH");
+    const legL = document.getElementById("legL");
+    const legC = document.getElementById("legC");
+    const legDelta = document.getElementById("legDelta");
+    if (!legO || !legDelta) return;
+    if (!c) {
+      legO.textContent = legH.textContent = legL.textContent = legC.textContent = "—";
+      legDelta.textContent = "—";
+      legDelta.classList.remove("positive", "negative");
+      return;
+    }
+    const o = Number(c.open);
+    const h = Number(c.high);
+    const l = Number(c.low);
+    const cl = Number(c.close);
+    legO.textContent = formatLegendPx(o);
+    legH.textContent = formatLegendPx(h);
+    legL.textContent = formatLegendPx(l);
+    legC.textContent = formatLegendPx(cl);
+    const ohlc = lastRenderedForCrosshair.ohlc || [];
+    const idx = timeSec != null ? findOhlcIndexByChartTime(timeSec) : ohlc.length - 1;
+    let chgPct = null;
+    if (idx > 0 && ohlc[idx - 1] && ohlc[idx - 1].close != null) {
+      const prevC = Number(ohlc[idx - 1].close);
+      if (prevC && Number.isFinite(prevC)) chgPct = ((cl - prevC) / prevC) * 100;
+    }
+    if (chgPct == null && Number.isFinite(o) && o !== 0) {
+      chgPct = ((cl - o) / o) * 100;
+    }
+    if (chgPct != null && Number.isFinite(chgPct)) {
+      const sign = chgPct >= 0 ? "+" : "";
+      legDelta.textContent = sign + chgPct.toFixed(2) + "%";
+      legDelta.classList.toggle("positive", chgPct >= 0);
+      legDelta.classList.toggle("negative", chgPct < 0);
+    } else {
+      legDelta.textContent = "—";
+      legDelta.classList.remove("positive", "negative");
+    }
+  }
+
+  function updateLegendFromCrosshairParam(param) {
+    if (!seriesCandle) return;
+    if (!param || param.time == null) {
+      const ohlc = lastRenderedForCrosshair.ohlc || [];
+      const last = ohlc[ohlc.length - 1];
+      if (last) updateLegendOhlcFromBar(last, toChartTime(last.time));
+      else updateLegendOhlcFromBar(null, null);
+      return;
+    }
+    const pt = param.seriesData && param.seriesData.get(seriesCandle);
+    if (pt && pt.open != null && pt.high != null && pt.low != null && pt.close != null) {
+      updateLegendOhlcFromBar(pt, param.time);
+      return;
+    }
+    const idx = findOhlcIndexByChartTime(param.time);
+    const ohlc = lastRenderedForCrosshair.ohlc || [];
+    if (idx >= 0 && ohlc[idx]) updateLegendOhlcFromBar(ohlc[idx], param.time);
+    else updateLegendOhlcFromBar(null, null);
+  }
 
   let fullKlinePayload = null;
   let lastRenderedForCrosshair = { ohlc: [], indicators: {} };
   let playbackTimer = null;
 
   const timeframeSelectTv = document.getElementById("timeframeTv");
+  const lookbackPctInput = document.getElementById("lookbackPctTv");
   const chartPriceTitleTv = document.getElementById("chartPriceTitleTv");
   const chartSymbolTitle = document.getElementById("chartSymbolTitle");
+
+  function getLookbackTrades() {
+    if (!lookbackPctInput) return 15;
+    var n = parseInt(String(lookbackPctInput.value), 10);
+    if (!Number.isFinite(n)) n = 15;
+    return Math.min(200, Math.max(1, n));
+  }
 
   function stopPlaybackTimer() {
     if (playbackTimer) {
@@ -230,6 +326,42 @@
     } catch (e) {}
   }
 
+  function slicePctChangePayload(payload, n) {
+    if (!payload.pct_change) return null;
+    const pc = payload.pct_change;
+    const lines = pc.lines || {};
+    const sliceArr = function (arr) {
+      return (arr || []).slice(0, n);
+    };
+    const fullOhlc = payload.ohlc || [];
+    const lastTs = n > 0 && fullOhlc[n - 1] ? fullOhlc[n - 1].time : null;
+    const lastT = lastTs ? toChartTime(lastTs) : null;
+    let trades = pc.trades || [];
+    if (lastT != null) {
+      trades = trades.filter(function (t) {
+        const ex = toChartTime(t.exit_time);
+        return ex != null && ex <= lastT;
+      });
+    }
+    return {
+      trade_count: pc.trade_count,
+      avg_signed_pct: pc.avg_signed_pct,
+      avg_abs_pct: pc.avg_abs_pct,
+      band_half_width_pct: pc.band_half_width_pct,
+      band_half_width_usdt: pc.band_half_width_usdt,
+      current_close: pc.current_close,
+      upper: pc.upper,
+      mid: pc.mid,
+      lower: pc.lower,
+      lines: {
+        upper: sliceArr(lines.upper),
+        mid: sliceArr(lines.mid),
+        lower: sliceArr(lines.lower),
+      },
+      trades: trades,
+    };
+  }
+
   function slicePayload(payload, n) {
     const ohlc = payload.ohlc.slice(0, n);
     const ind = payload.indicators || {};
@@ -240,7 +372,65 @@
     ["RSI", "EMA_RSI", "WMA_RSI", "EMA", "ATR"].forEach(function (k) {
       if (ind[k] && ind[k].length) out.indicators[k] = ind[k].slice(0, n);
     });
+    if (payload.pct_change) out.pct_change = slicePctChangePayload(payload, n);
+    if (payload.lookback_trades != null) out.lookback_trades = payload.lookback_trades;
     return out;
+  }
+
+  function mapPctLine(line) {
+    return (line || [])
+      .map(function (x) {
+        return { time: toChartTime(x.time), value: Number(x.value) };
+      })
+      .filter(function (x) {
+        return x.time != null && Number.isFinite(x.value);
+      });
+  }
+
+  function updateChartPctStat(pc) {
+    const statEl = document.getElementById("chartPctChangeStat");
+    if (!statEl) return;
+    if (!pc) {
+      statEl.textContent = "";
+      return;
+    }
+    const halfPct =
+      pc.band_half_width_pct != null ? Number(pc.band_half_width_pct) : Number(pc.avg_abs_pct || 0);
+    const halfUsdt = pc.band_half_width_usdt != null ? Number(pc.band_half_width_usdt) : null;
+    var t = "%change ";
+    t += Number.isFinite(halfPct) ? "±" + halfPct.toFixed(4) + "%" : "—";
+    if (halfUsdt != null && Number.isFinite(halfUsdt)) t += " (~" + halfUsdt.toFixed(2) + " USDT)";
+    statEl.textContent = t;
+  }
+
+  function updatePctTradeVlines() {
+    if (!tradeVlinesEl || !chartPrice) return;
+    tradeVlinesEl.innerHTML = "";
+    const ts = chartPrice.timeScale();
+    for (let ti = 0; ti < lastPctTrades.length; ti++) {
+      const t = lastPctTrades[ti];
+      const pairs = [
+        [t.entry_time, "#26a69a"],
+        [t.exit_time, "#78909c"],
+      ];
+      for (let pi = 0; pi < pairs.length; pi++) {
+        const iso = pairs[pi][0];
+        const color = pairs[pi][1];
+        if (!iso) continue;
+        const tm = typeof iso === "number" ? iso : toChartTime(iso);
+        if (!tm) continue;
+        const x = ts.timeToCoordinate(tm);
+        if (x == null || x === undefined || !Number.isFinite(x)) continue;
+        const line = document.createElement("div");
+        line.style.cssText =
+          "position:absolute;top:0;bottom:0;width:0;border-left:1px dashed " +
+          color +
+          ";left:" +
+          x +
+          "px;opacity:0.85;";
+        tradeVlinesEl.appendChild(line);
+      }
+    }
   }
 
   function renderPayloadToCharts(data, opts) {
@@ -258,6 +448,17 @@
       chartPriceTitleTv.textContent =
         "Không có nến — kiểm tra kết nối API / Binance · " + (data.symbol || "") + " " + interval;
       pendingViewSnapshot = null;
+      lastPctTrades = [];
+      updateChartPctStat(null);
+      if (tradeVlinesEl) tradeVlinesEl.innerHTML = "";
+      if (seriesPctUpper) {
+        seriesPctUpper.setData([]);
+        seriesPctMid.setData([]);
+        seriesPctLower.setData([]);
+      }
+      requestAnimationFrame(function () {
+        updateLegendFromCrosshairParam({ time: null });
+      });
       return;
     }
 
@@ -314,6 +515,23 @@
           })
       );
     }
+
+    const pc = data.pct_change;
+    if (seriesPctUpper && pc && pc.lines) {
+      const L = pc.lines;
+      seriesPctUpper.setData(mapPctLine(L.upper));
+      seriesPctMid.setData(mapPctLine(L.mid));
+      seriesPctLower.setData(mapPctLine(L.lower));
+      lastPctTrades = Array.isArray(pc.trades) ? pc.trades : [];
+      updateChartPctStat(pc);
+    } else if (seriesPctUpper) {
+      seriesPctUpper.setData([]);
+      seriesPctMid.setData([]);
+      seriesPctLower.setData([]);
+      lastPctTrades = [];
+      updateChartPctStat(null);
+    }
+
     if (chartIndicator && ind.RSI && ind.RSI.length) {
       const rsiData = times
         .map(function (t, i) {
@@ -358,6 +576,11 @@
     } else if (chartPrice) {
       restoreAfterPoll(ohlc);
     }
+
+    requestAnimationFrame(function () {
+      updateLegendFromCrosshairParam({ time: null });
+      updatePctTradeVlines();
+    });
   }
 
   function fetchKlinesTv(forceFitContent) {
@@ -374,7 +597,13 @@
       pendingViewSnapshot = null;
     }
 
-    fetch("/api/klines?interval=" + encodeURIComponent(interval) + "&limit=500")
+    var lb = getLookbackTrades();
+    fetch(
+      "/api/klines?interval=" +
+        encodeURIComponent(interval) +
+        "&limit=500&lookback_trades=" +
+        encodeURIComponent(String(lb))
+    )
       .then(function (r) {
         return r.json();
       })
@@ -438,11 +667,28 @@
       minBarSpacing: 0.8,
       barSpacing: 6,
     };
+    const crosshairOpts = {
+      mode: CrosshairModeNormal,
+      vertLine: {
+        width: 1,
+        color: "rgba(224, 227, 235, 0.25)",
+        style: 2,
+        labelBackgroundColor: "#2a2e39",
+      },
+      horzLine: {
+        width: 1,
+        color: "rgba(224, 227, 235, 0.25)",
+        style: 2,
+        labelBackgroundColor: "#2a2e39",
+      },
+    };
     const opts = {
       layout: { background: { type: "solid", color: "#131722" }, textColor: "#d1d4dc" },
       grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
       width: document.getElementById("chartPriceTv").clientWidth,
       height: document.getElementById("chartPriceTv").clientHeight,
+      crosshair: crosshairOpts,
+      kineticScroll: { mouse: true, touch: true },
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: true,
@@ -466,6 +712,24 @@
     });
     seriesCandle.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.35 } });
     seriesEma = chartPrice.addLineSeries({ color: "#f2a900", lineWidth: 2 });
+    seriesPctUpper = chartPrice.addLineSeries({
+      color: "#42a5f5",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    seriesPctMid = chartPrice.addLineSeries({
+      color: "#90a4ae",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    seriesPctLower = chartPrice.addLineSeries({
+      color: "#7e57c2",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
     seriesVolume = chartPrice.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "" });
     seriesVolume.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 }, borderVisible: false });
     seriesAtr = chartPrice.addLineSeries({
@@ -480,13 +744,27 @@
       autoScale: true,
       scaleMargins: { top: 0.12, bottom: 0.12 },
       borderVisible: true,
+      visible: false,
     });
+
+    tradeVlinesEl = document.createElement("div");
+    tradeVlinesEl.id = "pctChangeTradeVlines";
+    tradeVlinesEl.setAttribute("aria-hidden", "true");
+    tradeVlinesEl.style.cssText =
+      "position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:10;overflow:hidden;";
+    var chartPriceHost = document.getElementById("chartPriceTv");
+    if (chartPriceHost) {
+      chartPriceHost.style.position = "relative";
+      chartPriceHost.appendChild(tradeVlinesEl);
+    }
 
     const optsInd = {
       layout: { background: { type: "solid", color: "#131722" }, textColor: "#d1d4dc" },
       grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
       width: document.getElementById("chartIndicatorTv").clientWidth,
       height: document.getElementById("chartIndicatorTv").clientHeight,
+      crosshair: crosshairOpts,
+      kineticScroll: { mouse: true, touch: true },
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: true,
@@ -508,23 +786,33 @@
 
     chartPrice.timeScale().subscribeVisibleTimeRangeChange(function () {
       if (syncingVisibleRange) return;
-      const range = chartPrice.timeScale().getVisibleRange();
-      if (!range || !chartIndicator) return;
-      syncingVisibleRange = true;
-      try {
-        chartIndicator.timeScale().setVisibleRange(range);
-      } catch (e) {}
-      syncingVisibleRange = false;
+      if (syncRangeFromPriceRaf != null) cancelAnimationFrame(syncRangeFromPriceRaf);
+      syncRangeFromPriceRaf = requestAnimationFrame(function () {
+        syncRangeFromPriceRaf = null;
+        const range = chartPrice.timeScale().getVisibleRange();
+        if (!range || !chartIndicator) return;
+        syncingVisibleRange = true;
+        try {
+          chartIndicator.timeScale().setVisibleRange(range);
+        } catch (e) {}
+        syncingVisibleRange = false;
+        updatePctTradeVlines();
+      });
     });
     chartIndicator.timeScale().subscribeVisibleTimeRangeChange(function () {
       if (syncingVisibleRange) return;
-      const range = chartIndicator.timeScale().getVisibleRange();
-      if (!range || !chartPrice) return;
-      syncingVisibleRange = true;
-      try {
-        chartPrice.timeScale().setVisibleRange(range);
-      } catch (e) {}
-      syncingVisibleRange = false;
+      if (syncRangeFromIndRaf != null) cancelAnimationFrame(syncRangeFromIndRaf);
+      syncRangeFromIndRaf = requestAnimationFrame(function () {
+        syncRangeFromIndRaf = null;
+        const range = chartIndicator.timeScale().getVisibleRange();
+        if (!range || !chartPrice) return;
+        syncingVisibleRange = true;
+        try {
+          chartPrice.timeScale().setVisibleRange(range);
+        } catch (e) {}
+        syncingVisibleRange = false;
+        updatePctTradeVlines();
+      });
     });
 
     function getCrosshairPoint(series, param) {
@@ -554,6 +842,7 @@
       }
     }
     chartPrice.subscribeCrosshairMove(function (param) {
+      updateLegendFromCrosshairParam(param);
       var pt = getCrosshairPoint(seriesCandle, param);
       if (pt) {
         var at = getValueAtTime(pt.time);
@@ -567,6 +856,7 @@
       }
     });
     chartIndicator.subscribeCrosshairMove(function (param) {
+      updateLegendFromCrosshairParam(param);
       var pt = getCrosshairPoint(seriesRsi, param);
       if (pt) {
         var at = getValueAtTime(pt.time);
@@ -600,18 +890,28 @@
     function applyToggles() {
       const v = document.getElementById("togVolume").checked;
       const e = document.getElementById("togEma").checked;
+      const pchg = document.getElementById("togPctChange").checked;
       const r = document.getElementById("togRsi").checked;
       const er = document.getElementById("togEmaRsi").checked;
       const wr = document.getElementById("togWmaRsi").checked;
       const a = document.getElementById("togAtr").checked;
       if (seriesVolume) seriesVolume.applyOptions({ visible: v });
       if (seriesEma) seriesEma.applyOptions({ visible: e });
+      if (seriesPctUpper) {
+        seriesPctUpper.applyOptions({ visible: pchg });
+        seriesPctMid.applyOptions({ visible: pchg });
+        seriesPctLower.applyOptions({ visible: pchg });
+      }
+      if (tradeVlinesEl) tradeVlinesEl.style.display = pchg ? "" : "none";
       if (seriesAtr) seriesAtr.applyOptions({ visible: a });
+      try {
+        if (chartPrice) chartPrice.priceScale("atr").applyOptions({ visible: a });
+      } catch (err) {}
       if (seriesRsi) seriesRsi.applyOptions({ visible: r });
       if (seriesEmaRsi) seriesEmaRsi.applyOptions({ visible: er });
       if (seriesWmaRsi) seriesWmaRsi.applyOptions({ visible: wr });
     }
-    ["togVolume", "togEma", "togRsi", "togEmaRsi", "togWmaRsi", "togAtr"].forEach(function (id) {
+    ["togVolume", "togEma", "togPctChange", "togRsi", "togEmaRsi", "togWmaRsi", "togAtr"].forEach(function (id) {
       const el = document.getElementById(id);
       if (el) el.addEventListener("change", applyToggles);
     });
@@ -632,10 +932,15 @@
         if (chartIndicator) chartIndicator.timeScale().applyOptions({ rightOffset: ro });
       } catch (e) {}
     }
+    updatePctTradeVlines();
   }
 
   window.addEventListener("resize", function () {
-    resizeChartsTv();
+    if (resizeDebounceTimer != null) clearTimeout(resizeDebounceTimer);
+    resizeDebounceTimer = setTimeout(function () {
+      resizeDebounceTimer = null;
+      resizeChartsTv();
+    }, 120);
   });
 
   timeframeSelectTv.addEventListener("change", function () {
@@ -643,6 +948,22 @@
     stopPlaybackTimer();
     fetchKlinesTv(true);
   });
+
+  if (lookbackPctInput) {
+    lookbackPctInput.addEventListener("change", function () {
+      var v = getLookbackTrades();
+      lookbackPctInput.value = String(v);
+      playbackIndex = null;
+      stopPlaybackTimer();
+      fetchKlinesTv(false);
+    });
+    lookbackPctInput.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        lookbackPctInput.blur();
+      }
+    });
+  }
 
   document.getElementById("btnPlaybackLive").addEventListener("click", function () {
     playbackIndex = null;

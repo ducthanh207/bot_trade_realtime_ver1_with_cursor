@@ -264,21 +264,28 @@ def _do_paper_entry(chat_id: str, side: str, pct: float) -> str:
     if not balance or balance <= 0:
         return "Vốn = 0. Vào web Kích hoạt và nhập vốn."
     try:
+        import pandas as pd
+        from strategy import add_indicators, atr_1h_at_entry
+
         client = BinanceClient()
         df = client.get_klines_1m(settings.SYMBOL, limit=1)
         if df.empty:
             return "Không lấy được giá."
         entry_px = float(df["close"].iloc[-1])
         row_4h = None
+        df_1h = pd.DataFrame()
         try:
             df_4h = client.get_klines_4h(settings.SYMBOL, limit=100)
-            from strategy import add_indicators
             df_4h = add_indicators(df_4h)
             if not df_4h.empty:
                 row_4h = df_4h.iloc[-1]
+            df_1h_raw = client.get_klines_1h(settings.SYMBOL, limit=100)
+            if not df_1h_raw.empty:
+                df_1h = add_indicators(df_1h_raw)
         except Exception:
             pass
-        atr_now = float(row_4h["ATR"]) if row_4h is not None and "ATR" in row_4h else entry_px * 0.01
+        atr_fb = float(row_4h["ATR"]) if row_4h is not None and "ATR" in row_4h else entry_px * 0.01
+        atr_now = atr_1h_at_entry(df_1h, atr_fb)
         wallet_pct = max(0.01, min(1.0, pct / 100.0))
         lev = state.get_paper_leverage()
         size, margin, notional = size_and_margin(balance, entry_px, leverage=lev, wallet_pct=wallet_pct)

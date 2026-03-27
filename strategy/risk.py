@@ -15,6 +15,35 @@ def size_and_margin(capital: float, entry: float, leverage: float = None, wallet
     return size, margin, notional
 
 
+def refresh_atr_from_1h(open_trade: dict, df_1h: pd.DataFrame) -> None:
+    """
+    Cập nhật open_trade['atr'] theo ATR nến 1H đã đóng mới nhất (iloc[-2]).
+    Trailing (check_atr_trailing) dùng atr * ATR_MULTIPLIER — cập nhật mỗi vòng lặp
+    để có thể thoát theo biến động 1H khi nến 4H chưa đóng.
+    """
+    if not open_trade or df_1h is None or df_1h.empty or len(df_1h) < 3:
+        return
+    try:
+        atr = float(df_1h.iloc[-2]["ATR"])
+        if pd.notna(atr) and atr > 0:
+            open_trade["atr"] = atr
+    except (KeyError, TypeError, ValueError, IndexError):
+        pass
+
+
+def atr_1h_at_entry(df_1h: pd.DataFrame, fallback: float) -> float:
+    """ATR từ nến 1H đã đóng; nếu thiếu dữ liệu thì dùng fallback (vd ATR 4H)."""
+    if df_1h is None or df_1h.empty or len(df_1h) < 3:
+        return fallback
+    try:
+        atr = float(df_1h.iloc[-2]["ATR"])
+        if pd.notna(atr) and atr > 0:
+            return atr
+    except (KeyError, TypeError, ValueError, IndexError):
+        pass
+    return fallback
+
+
 def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
     """
     Trailing stop trên nến 1m. Trả (pnl_raw, exit_px) nếu hit, else (None, None).

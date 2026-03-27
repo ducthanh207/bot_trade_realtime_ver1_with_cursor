@@ -71,6 +71,9 @@ class BinanceClient:
     def get_klines_1m(self, symbol: str = None, limit: int = 1000) -> pd.DataFrame:
         return self.get_klines(symbol, "1m", limit)
 
+    def get_klines_1h(self, symbol: str = None, limit: int = 200) -> pd.DataFrame:
+        return self.get_klines(symbol, "1h", limit)
+
     def get_klines(self, symbol: str = None, interval: str = "5m", limit: int = 500) -> pd.DataFrame:
         """Lấy klines theo interval: 1m, 5m, 15m, 1h, 4h, 1d, 3d."""
         symbol = symbol or settings.SYMBOL

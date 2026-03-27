@@ -10,6 +10,8 @@ from strategy.signals import (
 )
 from strategy.risk import (
     size_and_margin,
+    refresh_atr_from_1h,
+    atr_1h_at_entry,
     check_atr_trailing,
     max_loss_from_capital,
     limit_pnl_and_exit_price,
@@ -25,6 +27,8 @@ __all__ = [
     "long_exit_early",
     "short_exit_early",
     "size_and_margin",
+    "refresh_atr_from_1h",
+    "atr_1h_at_entry",
     "check_atr_trailing",
     "max_loss_from_capital",
     "limit_pnl_and_exit_price",

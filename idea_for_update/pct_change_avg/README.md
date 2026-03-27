@@ -86,3 +86,8 @@ Gia tri mac dinh:
 3. Mo file:
    - `dashboard_demo.html`
 4. Bam `Load` de lay du lieu Binance va ve bands.
+
+## Tich hop production (khong doi file trong thu muc nay)
+
+- Logic chinh nam o `strategy/pct_change_avg.py`.
+- API Flask: `GET /api/klines?...&lookback_trades=15` tra them khoi `pct_change`; trang `/chart` ve indicator **%change** (3 duong + duong doc vao/ra).
