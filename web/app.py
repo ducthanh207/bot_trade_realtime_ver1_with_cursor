@@ -10,7 +10,7 @@ if str(_root) not in sys.path:
 
 import csv
 import io
-from flask import Flask, jsonify, request, render_template, Response
+from flask import Flask, jsonify, request, render_template, Response, redirect, url_for
 from datetime import datetime, timezone
 try:
     from config import settings as _app_settings
@@ -55,14 +55,33 @@ def get_status():
         return {"error": str(e)}
 
 
-@app.route("/")
-def index():
-    """Trang dashboard. No-cache để sau khi pull code + restart, refresh trình duyệt lấy bản mới."""
-    resp = app.make_response(render_template("dashboard.html"))
+def _html_no_cache(template, **kwargs):
+    """HTML không cache để sau deploy, F5 luôn lấy bản mới."""
+    resp = app.make_response(render_template(template, **kwargs))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
     return resp
+
+
+@app.route("/")
+def index():
+    return redirect(url_for("page_paper"))
+
+
+@app.route("/paper")
+def page_paper():
+    return _html_no_cache("paper.html", nav_active="paper")
+
+
+@app.route("/chart")
+def page_chart():
+    return _html_no_cache("chart.html", nav_active="chart")
+
+
+@app.route("/real")
+def page_real():
+    return _html_no_cache("real.html", nav_active="real")
 
 
 @app.route("/api/status")

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Paper trade – ATR Strategy{% endblock %}
+{% block content %}
+<section class="paper-layout" role="main">
+  <header class="overview">
+    <label>Vốn (USDT)</label>
+    <input type="number" id="initial_capital" value="1000" min="1" step="1">
+    <button class="start" id="btnStart">Kích hoạt</button>
+    <button class="pause" id="btnPause">Tạm dừng</button>
+    <button class="stop" id="btnStop">Dừng</button>
+    <button type="button" class="btn-clear" id="btnClearHistory">Xóa toàn bộ</button>
+    <span class="status-badge status-stopped" id="statusBadge">stopped</span>
+    <span class="stat" id="statStarted">Bắt đầu: —</span>
+    <span class="stat" id="statTradesDone">Lệnh đã hoàn thành: 0</span>
+    <span class="stat" id="statOrdersOpen">Lệnh_Open: 0</span>
+    <span class="stat" id="statWinrate">Winrate: 0%</span>
+    <span class="stat" id="statPnl">PNL: 0.00</span>
+    <span class="stat" id="statPnlOpen">PNL_Open: 0.00</span>
+    <span class="stat" id="statBalance">Vốn: 0.00</span>
+    <span class="stat" id="statCapitalOpen">Capital_Open: 0.00</span>
+    <span class="refresh-msg" id="refreshMsg">Cập nhật 5s</span>
+    <div class="overview-rules">
+      <label>Đòn bẩy</label>
+      <input type="number" id="inputLeverage" min="1" max="125" step="1" value="20" title="1–125">
+      <label>% vốn vào lệnh</label>
+      <input type="number" id="inputWalletPct" min="1" max="100" step="0.5" value="30" title="1–100%">
+      <button type="button" class="btn-rules" id="btnCapitalRules">Cập nhật quy tắc vốn</button>
+    </div>
+  </header>
+  <aside class="orders-panel">
+    <h3>Lệnh (mới nhất trên cùng) <button type="button" class="btn-export" id="btnExportCsv">Xuất CSV</button></h3>
+    <div class="orders-table-wrap">
+      <table class="orders-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Symbol</th><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>Profit</th><th>% PnL</th><th>%PnL vốn</th><th>Cap After</th><th>Reason</th><th>Thao tác</th>
+          </tr>
+        </thead>
+        <tbody id="ordersBody"></tbody>
+      </table>
+    </div>
+  </aside>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/paper.js') }}"></script>
+{% endblock %}
