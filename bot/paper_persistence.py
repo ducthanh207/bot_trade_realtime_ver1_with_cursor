@@ -61,6 +61,7 @@ def save_paper_state():
             "paper2_last_trade": _serialize_for_save(state.get_paper2_last_trade()) if state.get_paper2_last_trade() else None,
             "paper2_leverage": state.get_paper2_leverage(),
             "paper2_wallet_pct": state.get_paper2_wallet_pct(),
+            "paper2_lookback_trades": state.get_paper2_lookback_trades(),
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=0)
@@ -136,6 +137,12 @@ def load_paper_state():
         wct2 = data.get("paper2_wallet_pct")
         if wct2 is not None:
             state.set_paper2_wallet_pct(float(wct2))
+        lb2 = data.get("paper2_lookback_trades")
+        if lb2 is not None:
+            try:
+                state.set_paper2_lookback_trades(int(lb2))
+            except (TypeError, ValueError):
+                state.set_paper2_lookback_trades(None)
         last2 = data.get("paper2_last_trade")
         if last2:
             last2 = dict(last2)

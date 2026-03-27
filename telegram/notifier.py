@@ -135,6 +135,9 @@ def _format_status_phuong_phap(method_num: int, d: dict) -> list:
             client = BinanceClient()
             df4 = client.get_klines_4h(settings.SYMBOL, limit=200)
             lb = getattr(settings, "LOOKBACK_TRADES", 15)
+            v = state.get_paper2_lookback_trades()
+            if v is not None:
+                lb = min(max(int(v), 1), 200)
             sc = build_exit_scenarios_dict(pos, df4, lb)
             if side == "LONG":
                 pct_exit_px = sc.get("pct_upper")

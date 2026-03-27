@@ -227,6 +227,15 @@ def api_status():
     except Exception:
         d["paper2_leverage_display"] = d.get("paper2_leverage") or 20.0
         d["paper2_wallet_pct_display"] = d.get("paper2_wallet_pct") or 0.30
+    try:
+        from config import settings as _cfg
+        _lb = d.get("paper2_lookback_trades")
+        if _lb is not None:
+            d["paper2_lookback_display"] = int(_lb)
+        else:
+            d["paper2_lookback_display"] = int(getattr(_cfg, "LOOKBACK_TRADES", 15))
+    except Exception:
+        d["paper2_lookback_display"] = 15
     return jsonify(d)
 
 
@@ -408,6 +417,34 @@ def api_paper2_capital_rules():
         })
     except (TypeError, ValueError) as e:
         return jsonify({"ok": False, "error": "Giá trị không hợp lệ: " + str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/paper2/strategy", methods=["POST"])
+def api_paper2_strategy():
+    """Lưu lookback %change (số lệnh đã đóng trong cửa sổ — không phải số nến)."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        lb = data.get("lookback_trades")
+        if lb is None:
+            return jsonify({"ok": False, "error": "Thiếu lookback_trades"}), 400
+        lb = int(lb)
+        lb = min(max(lb, 1), 200)
+        from bot import state
+        state.set_paper2_lookback_trades(lb)
+        try:
+            from bot.paper_persistence import save_paper_state
+            save_paper_state()
+        except Exception:
+            pass
+        return jsonify({
+            "ok": True,
+            "message": "Đã lưu chiến lược Paper 2 (lookback %change).",
+            "paper2_lookback_trades": lb,
+        })
+    except (TypeError, ValueError) as e:
+        return jsonify({"ok": False, "error": "lookback_trades phải là số từ 1 đến 200: " + str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

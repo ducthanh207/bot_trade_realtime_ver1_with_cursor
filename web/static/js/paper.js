@@ -72,6 +72,12 @@
     if (pctEl != null)
       pctEl.value =
         field(d, "wallet_pct_display") != null ? Number(field(d, "wallet_pct_display")) * 100 : 30;
+    var lbEl = document.getElementById("inputPctLookback");
+    if (lbEl != null) {
+      var lbv = field(d, "lookback_display");
+      lbEl.value =
+        lbv != null && lbv !== "" ? String(Math.min(200, Math.max(1, parseInt(String(lbv), 10) || 15))) : "15";
+    }
   }
 
   function fetchOrders() {
@@ -232,6 +238,35 @@
         alert("Lỗi kết nối");
       });
   });
+  var btnSaveStrategy = document.getElementById("btnSaveStrategy");
+  if (btnSaveStrategy != null) {
+    btnSaveStrategy.addEventListener("click", function () {
+      var lbEl = document.getElementById("inputPctLookback");
+      var n = lbEl ? parseInt(String(lbEl.value), 10) : NaN;
+      if (isNaN(n) || n < 1 || n > 200) {
+        alert("Lookback (số lệnh) phải từ 1 đến 200");
+        return;
+      }
+      fetch(apiBase + "/strategy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lookback_trades: n }),
+      })
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (res) {
+          if (res.ok) {
+            refresh();
+            alert(res.message || "Đã lưu chiến lược.");
+          } else alert(res.error || "Lỗi");
+        })
+        .catch(function () {
+          alert("Lỗi kết nối");
+        });
+    });
+  }
+
   document.getElementById("btnCapitalRules").addEventListener("click", function () {
     var lev = parseFloat(document.getElementById("inputLeverage").value);
     var pct = parseFloat(document.getElementById("inputWalletPct").value);

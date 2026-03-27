@@ -40,6 +40,8 @@ _paper2_trades = []
 _paper2_last_trade = None
 _paper2_leverage = None
 _paper2_wallet_pct = None
+# Lookback %change (số lệnh đã đóng trong cửa sổ tính trung bình) — None = dùng config LOOKBACK_TRADES
+_paper2_lookback_trades = None
 
 
 def set_balance(value: float):
@@ -323,6 +325,19 @@ def set_paper2_wallet_pct(value: float or None):
     _paper2_wallet_pct = float(value) if value is not None else None
 
 
+def get_paper2_lookback_trades():
+    """None → bot dùng settings.LOOKBACK_TRADES. Đơn vị: số lệnh (lookback), không phải số nến."""
+    return _paper2_lookback_trades
+
+
+def set_paper2_lookback_trades(value):
+    global _paper2_lookback_trades
+    if value is None:
+        _paper2_lookback_trades = None
+    else:
+        _paper2_lookback_trades = int(value)
+
+
 def paper2_start(initial_capital: float):
     global _paper2_initial_capital, _paper2_balance, _paper2_started_at, _paper2_status
     global _paper2_open_trade
@@ -417,4 +432,5 @@ def to_status_dict():
         "paper2_short_count": short_ct2,
         "paper2_leverage": _paper2_leverage,
         "paper2_wallet_pct": _paper2_wallet_pct,
+        "paper2_lookback_trades": _paper2_lookback_trades,
     }

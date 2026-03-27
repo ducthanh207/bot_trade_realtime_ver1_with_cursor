@@ -38,6 +38,18 @@ FOUR_H_BOUNDARY_HOURS = (3, 7, 11, 15, 19, 23)
 FOUR_H_BOUNDARY_WINDOW_MINUTES = 5
 
 
+def _pct_lookback_trades_for_slot(slot_id: int) -> int:
+    """
+    Lookback cho %change = số lệnh đã đóng trong cửa sổ (không phải số nến).
+    Paper 2: dùng tùy chỉnh hoặc config; Paper 1: luôn config (PP1 không dùng pct trong loop).
+    """
+    if int(slot_id) == 2:
+        v = state.get_paper2_lookback_trades()
+        if v is not None:
+            return min(max(int(v), 1), 200)
+    return min(max(int(getattr(settings, "LOOKBACK_TRADES", 15)), 1), 200)
+
+
 def _is_4h_boundary_window() -> bool:
     now = datetime.now(_tz_app)
     return now.hour in FOUR_H_BOUNDARY_HOURS and now.minute < FOUR_H_BOUNDARY_WINDOW_MINUTES
@@ -172,6 +184,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                 if st == "stopped":
                     continue
 
+                lb_trades = _pct_lookback_trades_for_slot(slot_id)
                 balance = api["get_balance"]()
                 open_trade = api["get_open"]()
 
@@ -204,7 +217,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         paper_use_4h_window=True,
                         in_4h_window=in_4h_window,
                         method=method,
-                        lookback_trades=settings.LOOKBACK_TRADES,
+                        lookback_trades=lb_trades,
                         allow_early_exit=allow_early_exit,
                     )
                     open_trade["last_sl_check"] = df_1m.index[-1] if not df_1m.empty else ts_4h
@@ -307,7 +320,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         # Chỉ phương pháp dùng %change (PP2) mới snapshot dải — PP1 không đụng pct_change
                         if uses_pct_change_bands(method):
                             bands_at_entry = build_pct_change_avg_bands_series(
-                                df_4h_raw, lookback_trades=settings.LOOKBACK_TRADES
+                                df_4h_raw, lookback_trades=lb_trades
                             )
                             open_payload["pct_half_width_pct"] = bands_at_entry.get("band_half_width_pct")
                             open_payload["pct_upper_at_entry"] = bands_at_entry.get("upper")

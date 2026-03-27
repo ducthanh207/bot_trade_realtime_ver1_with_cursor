@@ -26,6 +26,11 @@
       <input type="number" id="inputWalletPct" min="1" max="100" step="0.5" value="30" title="1–100%">
       <button type="button" class="btn-rules" id="btnCapitalRules">Cập nhật quy tắc vốn</button>
     </div>
+    <div class="overview-rules overview-strategy-paper2">
+      <label for="inputPctLookback" title="Lookback: số lệnh đã đóng dùng để tính %change (1–200). Không phải số nến.">%change — lookback (số lệnh)</label>
+      <input type="number" id="inputPctLookback" min="1" max="200" step="1" value="15" inputmode="numeric" aria-label="Lookback số lệnh cho %change">
+      <button type="button" class="btn-rules" id="btnSaveStrategy">Lưu chiến lược</button>
+    </div>
   </header>
   <aside class="orders-panel">
     <h3>Lệnh (mới nhất trên cùng) <button type="button" class="btn-export" id="btnExportCsv">Xuất CSV</button></h3>
