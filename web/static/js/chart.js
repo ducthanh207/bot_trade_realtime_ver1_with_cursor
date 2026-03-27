@@ -67,8 +67,41 @@
     var bf = toUnixSeconds(b.from);
     var bt = toUnixSeconds(b.to);
     if (af == null || at == null || bf == null || bt == null) return false;
-    var eps = 1;
+    var eps = 4;
     return Math.abs(af - bf) <= eps && Math.abs(at - bt) <= eps;
+  }
+
+  /** Đếm cập nhật time scale từ code (không phải user): chặn subscribe ping-pong. */
+  let timeSyncSuppress = 0;
+
+  function runWithTimeSyncSuppressed(fn) {
+    timeSyncSuppress++;
+    try {
+      fn();
+    } catch (e) {}
+    queueMicrotask(function () {
+      timeSyncSuppress--;
+      if (timeSyncSuppress < 0) timeSyncSuppress = 0;
+    });
+  }
+
+  function syncPeerVisibleTimeRange(sourceChart, targetChart) {
+    if (!sourceChart || !targetChart) return;
+    var range = sourceChart.timeScale().getVisibleRange();
+    if (!range) return;
+    var peer = null;
+    try {
+      peer = targetChart.timeScale().getVisibleRange();
+    } catch (e1) {}
+    if (peer && visibleRangeNearlyEqual(peer, range)) return;
+    timeSyncSuppress++;
+    try {
+      targetChart.timeScale().setVisibleRange(range);
+    } catch (e2) {}
+    queueMicrotask(function () {
+      timeSyncSuppress--;
+      if (timeSyncSuppress < 0) timeSyncSuppress = 0;
+    });
   }
 
   function estimateAvgBarSec(ohlc) {
@@ -97,14 +130,16 @@
   function applyDefaultEndView() {
     if (!chartPrice) return;
     var ro = computeRightOffsetBars();
-    try {
-      chartPrice.timeScale().applyOptions({ rightOffset: ro, barSpacing: 6, shiftVisibleRangeOnNewBar: false });
-      chartPrice.timeScale().scrollToRealTime();
-      if (chartIndicator) {
-        chartIndicator.timeScale().applyOptions({ rightOffset: ro, barSpacing: 6, shiftVisibleRangeOnNewBar: false });
-        chartIndicator.timeScale().scrollToRealTime();
-      }
-    } catch (e) {}
+    runWithTimeSyncSuppressed(function () {
+      try {
+        chartPrice.timeScale().applyOptions({ rightOffset: ro, barSpacing: 6, shiftVisibleRangeOnNewBar: false });
+        chartPrice.timeScale().scrollToRealTime();
+        if (chartIndicator) {
+          chartIndicator.timeScale().applyOptions({ rightOffset: ro, barSpacing: 6, shiftVisibleRangeOnNewBar: false });
+          chartIndicator.timeScale().scrollToRealTime();
+        }
+      } catch (e) {}
+    });
   }
 
   function captureViewSnapshot() {
@@ -151,8 +186,10 @@
         from = Math.max(t0, from);
         to = Math.max(from + 1, Math.min(t1, to));
         if (from >= to) return;
-        chartPrice.timeScale().setVisibleRange({ from: from, to: to });
-        if (chartIndicator) chartIndicator.timeScale().setVisibleRange({ from: from, to: to });
+        runWithTimeSyncSuppressed(function () {
+          chartPrice.timeScale().setVisibleRange({ from: from, to: to });
+          if (chartIndicator) chartIndicator.timeScale().setVisibleRange({ from: from, to: to });
+        });
       } catch (e) {}
     });
   }
@@ -164,14 +201,16 @@
     var n = barCount;
     var want = 72;
     var from = Math.max(0, n - 1 - want);
-    try {
-      chartPrice.timeScale().applyOptions({ rightOffset: ro, shiftVisibleRangeOnNewBar: false });
-      chartPrice.timeScale().setVisibleLogicalRange({ from: from, to: n - 1 });
-      if (chartIndicator) {
-        chartIndicator.timeScale().applyOptions({ rightOffset: ro, shiftVisibleRangeOnNewBar: false });
-        chartIndicator.timeScale().setVisibleLogicalRange({ from: from, to: n - 1 });
-      }
-    } catch (e) {}
+    runWithTimeSyncSuppressed(function () {
+      try {
+        chartPrice.timeScale().applyOptions({ rightOffset: ro, shiftVisibleRangeOnNewBar: false });
+        chartPrice.timeScale().setVisibleLogicalRange({ from: from, to: n - 1 });
+        if (chartIndicator) {
+          chartIndicator.timeScale().applyOptions({ rightOffset: ro, shiftVisibleRangeOnNewBar: false });
+          chartIndicator.timeScale().setVisibleLogicalRange({ from: from, to: n - 1 });
+        }
+      } catch (e) {}
+    });
   }
 
   let chartPrice = null;
@@ -189,10 +228,7 @@
   let currentTimeframeTv = "5m";
   let tvChartsInited = false;
   let hasInitialFit = false;
-  let syncingVisibleRange = false;
   let pendingViewSnapshot = null;
-  let syncRangeFromPriceRaf = null;
-  let syncRangeFromIndRaf = null;
   let resizeDebounceTimer = null;
 
   const CrosshairModeNormal =
@@ -749,42 +785,14 @@
     seriesWmaRsi = chartIndicator.addLineSeries({ color: "#ef5350", lineWidth: 2 });
 
     chartPrice.timeScale().subscribeVisibleTimeRangeChange(function () {
-      if (syncingVisibleRange) return;
-      if (syncRangeFromPriceRaf != null) cancelAnimationFrame(syncRangeFromPriceRaf);
-      syncRangeFromPriceRaf = requestAnimationFrame(function () {
-        syncRangeFromPriceRaf = null;
-        const range = chartPrice.timeScale().getVisibleRange();
-        if (!range || !chartIndicator) return;
-        var peerRange = null;
-        try {
-          peerRange = chartIndicator.timeScale().getVisibleRange();
-        } catch (e2) {}
-        if (peerRange && visibleRangeNearlyEqual(peerRange, range)) return;
-        syncingVisibleRange = true;
-        try {
-          chartIndicator.timeScale().setVisibleRange(range);
-        } catch (e) {}
-        syncingVisibleRange = false;
-      });
+      if (timeSyncSuppress > 0) return;
+      if (!chartIndicator) return;
+      syncPeerVisibleTimeRange(chartPrice, chartIndicator);
     });
     chartIndicator.timeScale().subscribeVisibleTimeRangeChange(function () {
-      if (syncingVisibleRange) return;
-      if (syncRangeFromIndRaf != null) cancelAnimationFrame(syncRangeFromIndRaf);
-      syncRangeFromIndRaf = requestAnimationFrame(function () {
-        syncRangeFromIndRaf = null;
-        const range = chartIndicator.timeScale().getVisibleRange();
-        if (!range || !chartPrice) return;
-        var peerRange = null;
-        try {
-          peerRange = chartPrice.timeScale().getVisibleRange();
-        } catch (e2) {}
-        if (peerRange && visibleRangeNearlyEqual(peerRange, range)) return;
-        syncingVisibleRange = true;
-        try {
-          chartPrice.timeScale().setVisibleRange(range);
-        } catch (e) {}
-        syncingVisibleRange = false;
-      });
+      if (timeSyncSuppress > 0) return;
+      if (!chartPrice) return;
+      syncPeerVisibleTimeRange(chartIndicator, chartPrice);
     });
 
     function getCrosshairPoint(series, param) {
@@ -898,10 +906,12 @@
     if (chartIndicator) chartIndicator.applyOptions({ width: wi, height: hi });
     if (playbackIndex === null && chartPrice) {
       var ro = computeRightOffsetBars();
-      try {
-        chartPrice.timeScale().applyOptions({ rightOffset: ro });
-        if (chartIndicator) chartIndicator.timeScale().applyOptions({ rightOffset: ro });
-      } catch (e) {}
+      runWithTimeSyncSuppressed(function () {
+        try {
+          chartPrice.timeScale().applyOptions({ rightOffset: ro });
+          if (chartIndicator) chartIndicator.timeScale().applyOptions({ rightOffset: ro });
+        } catch (e) {}
+      });
     }
   }
 
