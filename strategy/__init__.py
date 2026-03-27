@@ -17,6 +17,8 @@ from strategy.risk import (
     limit_pnl_and_exit_price,
 )
 from strategy.advisory import evaluate_conditions
+from strategy.exit_engine import compute_exit_candidates, pick_best_exit
+from strategy.exit_scenarios import build_exit_scenarios_dict, format_exit_scenarios_text
 
 __all__ = [
     "add_indicators",
@@ -33,4 +35,8 @@ __all__ = [
     "max_loss_from_capital",
     "limit_pnl_and_exit_price",
     "evaluate_conditions",
+    "compute_exit_candidates",
+    "pick_best_exit",
+    "build_exit_scenarios_dict",
+    "format_exit_scenarios_text",
 ]

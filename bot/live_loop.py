@@ -16,17 +16,14 @@ from strategy import (
     add_indicators,
     long_entry,
     short_entry,
-    long_exit,
-    short_exit,
-    long_exit_early,
-    short_exit_early,
     size_and_margin,
-    refresh_atr_from_1h,
     atr_1h_at_entry,
-    check_atr_trailing,
-    max_loss_from_capital,
-    limit_pnl_and_exit_price,
+    compute_exit_candidates,
+    pick_best_exit,
 )
+from strategy.strategies import get_trading_method
+from strategy.strategies.registry import uses_pct_change_bands
+from strategy.pct_change_avg import build_pct_change_avg_bands_series
 import bot.state as state
 
 
@@ -53,6 +50,7 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
     """
     state.set_bot_started_at()
     last_status_min = None
+    last_hourly_status = None
     symbol = settings.SYMBOL
 
     while True:
@@ -121,68 +119,38 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
 
             # ---------- EXIT: có position ----------
             if open_trade and pos_exchange:
-                entry = open_trade["entry_price"]
-                size = open_trade["size"]
+                entry = float(open_trade["entry_price"])
+                size = float(open_trade["size"])
                 side = open_trade["side"]
-                max_loss = max_loss_from_capital(open_trade)
-                candidates = []  # (time, pnl_net, exit_px, reason)
 
-                # LAYER 1: Liquidation + ATR trên 1m từ last_sl_check đến hết dữ liệu 1m
-                last_check = open_trade.get("last_sl_check")
-                if last_check is not None and not df_1m.empty:
-                    df_slice = df_1m.loc[df_1m.index >= last_check]
-                    refresh_atr_from_1h(open_trade, df_1h)
-                    margin = open_trade["margin"]
-                    notional = open_trade["notional"]
-                    maint = settings.MAINT_MARGIN_RATE * notional
-
-                    for t_1m, m1 in df_slice.iterrows():
-                        if side == "LONG":
-                            liq_px = entry + (maint - margin) / size
-                            if m1["low"] <= liq_px:
-                                candidates.append((t_1m, -margin, liq_px, "LIQUIDATION"))
-                                break
-                        else:
-                            liq_px = entry - (maint - margin) / size
-                            if m1["high"] >= liq_px:
-                                candidates.append((t_1m, -margin, liq_px, "LIQUIDATION"))
-                                break
-
-                        pnl_raw, exit_px = check_atr_trailing(open_trade, m1)
-                        if pnl_raw is not None:
-                            pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
-                            if px_lim is not None:
-                                exit_px = px_lim
-                            fee_out = size * exit_px * settings.TAKER_FEE
-                            candidates.append((t_1m, pnl_lim - fee_out, exit_px, "ATR_TRAIL"))
-                            break
-
-                open_trade["last_sl_check"] = df_1m.index[-1] if not df_1m.empty else ts_4h
-
-                # Giá thoát ước lượng = giá đóng nến 1m mới nhất
                 exit_px_ref = float(df_1m["close"].iloc[-1]) if not df_1m.empty else float(row["close"])
+                exit_time_ts = df_1m.index[-1] if not df_1m.empty else ts_4h
 
-                # LAYER 2: 4H exit signal
-                if long_exit(prev_row, row) if side == "LONG" else short_exit(prev_row, row):
-                    pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
-                    pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
-                    exit_px = px_lim if px_lim is not None else exit_px_ref
-                    fee_out = size * exit_px * settings.TAKER_FEE
-                    candidates.append((df_1m.index[-1] if not df_1m.empty else ts_4h, pnl_lim - fee_out, exit_px, "4H_EXIT"))
-
-                # LAYER 2b: Early exit chỉ khi đã sang nến 4h mới (tránh loop)
                 row_4h_ts = df_4h.index[-1]
                 entry_4h_ts = open_trade.get("entry_4h_ts")
                 allow_early_exit = entry_4h_ts is None or row_4h_ts != entry_4h_ts
-                if allow_early_exit and (long_exit_early(prev_row, row) if side == "LONG" else short_exit_early(prev_row, row)):
-                    pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
-                    pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
-                    exit_px = px_lim if px_lim is not None else exit_px_ref
-                    fee_out = size * exit_px * settings.TAKER_FEE
-                    candidates.append((df_1m.index[-1] if not df_1m.empty else ts_4h, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT"))
 
-                if candidates:
-                    best_time, best_pnl, best_px, reason = min(candidates, key=lambda x: (x[0], -x[1]))
+                method = get_trading_method()
+                candidates = compute_exit_candidates(
+                    open_trade,
+                    df_1m,
+                    df_1h,
+                    df_4h_raw,
+                    prev_row,
+                    row,
+                    exit_px_ref,
+                    exit_time_ts,
+                    paper_use_4h_window=False,
+                    in_4h_window=True,
+                    method=method,
+                    lookback_trades=settings.LOOKBACK_TRADES,
+                    allow_early_exit=allow_early_exit,
+                )
+                open_trade["last_sl_check"] = df_1m.index[-1] if not df_1m.empty else ts_4h
+
+                best = pick_best_exit(candidates)
+                if best is not None:
+                    best_time, best_pnl, best_px, reason = best
                     if not settings.DRY_RUN:
                         client.close_position(symbol)
                     closed = {
@@ -226,9 +194,10 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                     atr_now = atr_1h_at_entry(df_1h, float(row["ATR"]))
                     trail_dist = atr_now * settings.ATR_MULTIPLIER
                     init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
+                    tm = get_trading_method()
                     # Lưu entry_4h_ts để tránh early exit ngay trên cùng nến vừa vào (gây loop)
                     entry_4h_ts = df_4h.index[-1]
-                    state.set_open_trade({
+                    live_open = {
                         "side": side,
                         "entry_time": datetime.now(_tz_app),
                         "entry_price": entry_px,
@@ -240,13 +209,22 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                         "trail_stop": init_stop,
                         "last_sl_check": df_1m.index[-1] if not df_1m.empty else ts_4h,
                         "entry_4h_ts": entry_4h_ts,
-                    })
+                        "trading_method": tm,
+                    }
+                    if uses_pct_change_bands(tm):
+                        bands_at_entry = build_pct_change_avg_bands_series(
+                            df_4h_raw, lookback_trades=settings.LOOKBACK_TRADES
+                        )
+                        live_open["pct_half_width_pct"] = bands_at_entry.get("band_half_width_pct")
+                        live_open["pct_upper_at_entry"] = bands_at_entry.get("upper")
+                        live_open["pct_lower_at_entry"] = bands_at_entry.get("lower")
+                    state.set_open_trade(live_open)
                     if notify_func:
                         notify_func(
                             f"🟢 Mở lệnh {side} @ {entry_px:.2f} | Size: {qty} BTC"
                         )
 
-            # Status định kỳ
+            # Status định kỳ + báo kịch bản thoát mỗi giờ
             now = datetime.now(_tz_app)
             if status_func and last_status_min is not None:
                 delta_min = (now - last_status_min).total_seconds() / 60
@@ -255,6 +233,18 @@ def run_live_loop(client: BinanceClient, notify_func=None, status_func=None):
                     last_status_min = now
             elif last_status_min is None:
                 last_status_min = now
+
+            if last_hourly_status is not None:
+                dh = (now - last_hourly_status).total_seconds() / 60
+                if dh >= getattr(settings, "STATUS_HOURLY_INTERVAL_MIN", 60):
+                    try:
+                        from telegram.notifier import send_status_hourly
+                        send_status_hourly()
+                    except Exception:
+                        pass
+                    last_hourly_status = now
+            else:
+                last_hourly_status = now
 
         except Exception as e:
             if notify_func:

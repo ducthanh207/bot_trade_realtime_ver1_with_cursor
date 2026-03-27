@@ -33,6 +33,10 @@ body {
   color: #2962ff;
   border-bottom-color: #2962ff;
 }
+.nav-paper-group {
+  display: inline-flex;
+  align-items: stretch;
+}
 
 .layout-root {
   display: flex;

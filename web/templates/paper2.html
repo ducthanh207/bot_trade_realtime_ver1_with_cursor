@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Paper trade – ATR Strategy{% endblock %}
+{% block title %}Paper trade 2 – ATR Strategy{% endblock %}
 {% block content %}
 <section class="paper-layout" role="main">
   <header class="overview">
@@ -44,7 +44,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
-  window.PAPER_UI = { slot: 1, prefix: "paper", apiBase: "/api/paper" };
+  window.PAPER_UI = { slot: 2, prefix: "paper2", apiBase: "/api/paper2" };
 </script>
 <script src="{{ url_for('static', filename='js/paper.js') }}"></script>
 {% endblock %}

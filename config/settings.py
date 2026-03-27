@@ -49,9 +49,14 @@ RSI_EARLY_EXIT = os.environ.get("RSI_EARLY_EXIT", "true").lower() in ("1", "true
 RSI_LONG_CUT = float(os.environ.get("RSI_LONG_CUT", "42"))
 RSI_SHORT_CUT = float(os.environ.get("RSI_SHORT_CUT", "58"))
 
+# Phương pháp: "1" = chiến lược cũ; "2" = thêm TP %change + lọc thoát 4H/early khi lãi + đảo chiều RSI 1H
+TRADING_METHOD = (os.environ.get("TRADING_METHOD") or "1").strip()
+LOOKBACK_TRADES = int(os.environ.get("LOOKBACK_TRADES", "15"))
+
 # ---------- Loop ----------
 LOOP_INTERVAL_SEC = float(os.environ.get("LOOP_INTERVAL_SEC", "5"))
 STATUS_INTERVAL_MIN = int(os.environ.get("STATUS_INTERVAL_MIN", "15"))
+STATUS_HOURLY_INTERVAL_MIN = int(os.environ.get("STATUS_HOURLY_INTERVAL_MIN", "60"))
 
 # ---------- Web ----------
 WEB_HOST = os.environ.get("WEB_HOST", "0.0.0.0")

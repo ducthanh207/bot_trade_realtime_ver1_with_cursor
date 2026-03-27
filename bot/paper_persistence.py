@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_FILE = ROOT / "paper_state.json"
 
 _restore_pending = False
+_restore_pending_paper2 = False
 
 
 def _parse_dt(v):
@@ -39,6 +40,8 @@ def save_paper_state():
         from bot import state
         open_trade = state.get_paper_open_trade()
         started = state.get_paper_started_at()
+        open2 = state.get_paper2_open_trade()
+        started2 = state.get_paper2_started_at()
         data = {
             "paper_initial_capital": state.get_paper_initial_capital(),
             "paper_balance": state.get_paper_balance(),
@@ -49,6 +52,15 @@ def save_paper_state():
             "paper_last_trade": _serialize_for_save(state.get_paper_last_trade()) if state.get_paper_last_trade() else None,
             "paper_leverage": state.get_paper_leverage(),
             "paper_wallet_pct": state.get_paper_wallet_pct(),
+            "paper2_initial_capital": state.get_paper2_initial_capital(),
+            "paper2_balance": state.get_paper2_balance(),
+            "paper2_started_at": started2.isoformat() if started2 else None,
+            "paper2_status": state.get_paper2_status(),
+            "paper2_open_trade": _serialize_for_save(open2) if open2 else None,
+            "paper2_trades": _serialize_for_save(state.get_paper2_trades()),
+            "paper2_last_trade": _serialize_for_save(state.get_paper2_last_trade()) if state.get_paper2_last_trade() else None,
+            "paper2_leverage": state.get_paper2_leverage(),
+            "paper2_wallet_pct": state.get_paper2_wallet_pct(),
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=0)
@@ -58,9 +70,9 @@ def save_paper_state():
 
 def load_paper_state():
     """
-    Đọc file và áp dụng vào state. Trả về True nếu đã khôi phục và có lệnh đang mở.
+    Đọc file và áp dụng vào state. Trả về True nếu đã khôi phục và có lệnh đang mở (paper 1 hoặc 2).
     """
-    global _restore_pending
+    global _restore_pending, _restore_pending_paper2
     if not STATE_FILE.exists():
         return False
     try:
@@ -103,6 +115,42 @@ def load_paper_state():
                 open_trade["last_sl_check"] = _parse_dt(open_trade["last_sl_check"])
             state.set_paper_open_trade(open_trade)
             _restore_pending = True
+        if data.get("paper2_initial_capital") is not None:
+            state.set_paper2_initial_capital(float(data.get("paper2_initial_capital") or 0))
+        if data.get("paper2_balance") is not None:
+            state.set_paper2_balance(float(data.get("paper2_balance") or 0))
+        started2 = _parse_dt(data.get("paper2_started_at"))
+        state.set_paper2_started_at(started2)
+        state.set_paper2_status(str(data.get("paper2_status") or "stopped"))
+        trades2_raw = data.get("paper2_trades") or []
+        trades2 = []
+        for t in trades2_raw:
+            tt = dict(t)
+            tt["entry_time"] = _parse_dt(t.get("entry_time"))
+            tt["exit_time"] = _parse_dt(t.get("exit_time"))
+            trades2.append(tt)
+        state.restore_paper2_trades(trades2)
+        lev2 = data.get("paper2_leverage")
+        if lev2 is not None:
+            state.set_paper2_leverage(float(lev2))
+        wct2 = data.get("paper2_wallet_pct")
+        if wct2 is not None:
+            state.set_paper2_wallet_pct(float(wct2))
+        last2 = data.get("paper2_last_trade")
+        if last2:
+            last2 = dict(last2)
+            last2["entry_time"] = _parse_dt(last2.get("entry_time"))
+            last2["exit_time"] = _parse_dt(last2.get("exit_time"))
+            state.set_paper2_last_trade(last2)
+        open2 = data.get("paper2_open_trade")
+        if open2:
+            open2 = dict(open2)
+            open2["entry_time"] = _parse_dt(open2.get("entry_time"))
+            if open2.get("last_sl_check"):
+                open2["last_sl_check"] = _parse_dt(open2["last_sl_check"])
+            state.set_paper2_open_trade(open2)
+            _restore_pending_paper2 = True
+        if _restore_pending or _restore_pending_paper2:
             return True
         return False
     except Exception:
@@ -114,5 +162,20 @@ def get_restore_pending():
 
 
 def clear_restore_pending():
+    global _restore_pending, _restore_pending_paper2
+    _restore_pending = False
+    _restore_pending_paper2 = False
+
+
+def clear_restore_pending_paper():
     global _restore_pending
     _restore_pending = False
+
+
+def clear_restore_pending_paper2():
+    global _restore_pending_paper2
+    _restore_pending_paper2 = False
+
+
+def get_restore_pending_paper2():
+    return _restore_pending_paper2

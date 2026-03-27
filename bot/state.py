@@ -30,6 +30,17 @@ _paper_last_trade = None   # lệnh gần nhất đóng
 _paper_leverage = None
 _paper_wallet_pct = None
 
+# ---------- Paper trade 2 (phương pháp 2 — tách biệt với paper slot 1) ----------
+_paper2_initial_capital = 0.0
+_paper2_balance = 0.0
+_paper2_started_at = None
+_paper2_status = "stopped"
+_paper2_open_trade = None
+_paper2_trades = []
+_paper2_last_trade = None
+_paper2_leverage = None
+_paper2_wallet_pct = None
+
 
 def set_balance(value: float):
     global _balance
@@ -224,6 +235,128 @@ def paper_stop():
     _paper_status = "stopped"
 
 
+# ---------- Paper trade 2 ----------
+def set_paper2_initial_capital(value: float):
+    global _paper2_initial_capital
+    _paper2_initial_capital = value
+
+
+def get_paper2_initial_capital() -> float:
+    return _paper2_initial_capital
+
+
+def set_paper2_balance(value: float):
+    global _paper2_balance
+    _paper2_balance = value
+
+
+def get_paper2_balance() -> float:
+    return _paper2_balance
+
+
+def set_paper2_started_at(dt: datetime or None):
+    global _paper2_started_at
+    _paper2_started_at = dt
+
+
+def get_paper2_started_at():
+    return _paper2_started_at
+
+
+def set_paper2_status(value: str):
+    global _paper2_status
+    if value in ("stopped", "running", "paused"):
+        _paper2_status = value
+
+
+def get_paper2_status() -> str:
+    return _paper2_status
+
+
+def set_paper2_open_trade(trade: dict or None):
+    global _paper2_open_trade
+    _paper2_open_trade = trade
+
+
+def get_paper2_open_trade():
+    return _paper2_open_trade
+
+
+def append_paper2_trade(trade: dict):
+    global _paper2_trades
+    _paper2_trades.append(trade)
+
+
+def get_paper2_trades():
+    return list(_paper2_trades)
+
+
+def restore_paper2_trades(trades: list):
+    global _paper2_trades
+    _paper2_trades = list(trades) if trades else []
+
+
+def set_paper2_last_trade(trade: dict or None):
+    global _paper2_last_trade
+    _paper2_last_trade = trade
+
+
+def get_paper2_last_trade():
+    return _paper2_last_trade
+
+
+def get_paper2_leverage():
+    return _paper2_leverage
+
+
+def set_paper2_leverage(value: float or None):
+    global _paper2_leverage
+    _paper2_leverage = float(value) if value is not None else None
+
+
+def get_paper2_wallet_pct():
+    return _paper2_wallet_pct
+
+
+def set_paper2_wallet_pct(value: float or None):
+    global _paper2_wallet_pct
+    _paper2_wallet_pct = float(value) if value is not None else None
+
+
+def paper2_start(initial_capital: float):
+    global _paper2_initial_capital, _paper2_balance, _paper2_started_at, _paper2_status
+    global _paper2_open_trade
+    _paper2_open_trade = None
+    _paper2_status = "running"
+    if _paper2_started_at is None:
+        _paper2_initial_capital = float(initial_capital)
+        _paper2_balance = float(initial_capital)
+        _paper2_started_at = datetime.now(_tz_app)
+    else:
+        _paper2_initial_capital = float(initial_capital) if initial_capital and initial_capital > 0 else _paper2_initial_capital
+
+
+def paper2_clear_history():
+    global _paper2_trades, _paper2_last_trade, _paper2_open_trade
+    global _paper2_initial_capital, _paper2_balance, _paper2_started_at, _paper2_status
+    _paper2_trades = []
+    _paper2_last_trade = None
+    _paper2_open_trade = None
+    _paper2_started_at = None
+    _paper2_status = "stopped"
+    _paper2_balance = _paper2_initial_capital if _paper2_initial_capital else 0
+
+
+def paper2_pause():
+    global _paper2_status
+    _paper2_status = "paused"
+
+
+def paper2_stop():
+    global _paper2_status
+    _paper2_status = "stopped"
+
+
 def to_status_dict():
     """Dict cho web/Telegram. Ưu tiên paper trade."""
     pos = get_position()
@@ -238,6 +371,15 @@ def to_status_dict():
     short_ct = n - long_ct
     winrate = (wins / n * 100.0) if n else 0.0
 
+    paper2_trades = get_paper2_trades()
+    n2 = len(paper2_trades)
+    wins2 = sum(1 for t in paper2_trades if float(t.get("profit", 0)) > 0)
+    total_pnl2 = sum(float(t.get("profit", 0)) for t in paper2_trades)
+    long_ct2 = sum(1 for t in paper2_trades if str(t.get("side", "")).upper() == "LONG")
+    short_ct2 = n2 - long_ct2
+    winrate2 = (wins2 / n2 * 100.0) if n2 else 0.0
+    paper2_started = get_paper2_started_at()
+
     return {
         "balance": get_balance(),
         "position": pos,
@@ -245,7 +387,7 @@ def to_status_dict():
         "trades_today_count": len(get_trades_today()),
         "bot_started_at": started.isoformat() if started else None,
         "stop_requested": is_stop_requested(),
-        # Paper
+        # Paper (phương pháp 1)
         "paper_initial_capital": get_paper_initial_capital(),
         "paper_balance": get_paper_balance(),
         "paper_started_at": paper_started.isoformat() if paper_started else None,
@@ -260,4 +402,19 @@ def to_status_dict():
         "paper_short_count": short_ct,
         "paper_leverage": _paper_leverage,
         "paper_wallet_pct": _paper_wallet_pct,
+        # Paper 2 (phương pháp 2)
+        "paper2_initial_capital": get_paper2_initial_capital(),
+        "paper2_balance": get_paper2_balance(),
+        "paper2_started_at": paper2_started.isoformat() if paper2_started else None,
+        "paper2_status": get_paper2_status(),
+        "paper2_open_trade": get_paper2_open_trade(),
+        "paper2_trades": paper2_trades,
+        "paper2_last_trade": get_paper2_last_trade(),
+        "paper2_trades_count": n2,
+        "paper2_winrate": round(winrate2, 2),
+        "paper2_total_pnl": round(total_pnl2, 2),
+        "paper2_long_count": long_ct2,
+        "paper2_short_count": short_ct2,
+        "paper2_leverage": _paper2_leverage,
+        "paper2_wallet_pct": _paper2_wallet_pct,
     }
