@@ -257,6 +257,14 @@ body {
 .chart-tv-toolbar button:hover { background: #363a45; }
 .chart-tv-toolbar button.primary { background: #2962ff; border-color: #2962ff; }
 .chart-tv-toolbar button.primary:hover { background: #1e53e5; }
+.chart-tv-toolbar button.chart-save-btn {
+  border-color: #434651;
+  color: #b2b5be;
+}
+.chart-tv-toolbar button.chart-save-btn:hover {
+  background: #363a45;
+  color: #d1d4dc;
+}
 .chart-tv-toolbar .playback-hint {
   font-size: 11px;
   color: #787b86;

@@ -227,7 +227,19 @@
   let tvChartsInited = false;
   let hasInitialFit = false;
   let pendingViewSnapshot = null;
+  let restoreLogicalOnce = null;
   let resizeDebounceTimer = null;
+
+  const CHART_TV_STORAGE_KEY = "atrChartTv_settings_v1";
+  const CHART_TOGGLE_IDS = [
+    "togVolume",
+    "togEma",
+    "togPctChange",
+    "togRsi",
+    "togEmaRsi",
+    "togWmaRsi",
+    "togAtr",
+  ];
 
   const CrosshairModeNormal =
     typeof LightweightCharts !== "undefined" && LightweightCharts.CrosshairMode != null
@@ -324,6 +336,76 @@
     if (!Number.isFinite(n)) n = 15;
     return Math.min(200, Math.max(1, n));
   }
+
+  function loadChartSettingsFromStorage() {
+    try {
+      var raw = localStorage.getItem(CHART_TV_STORAGE_KEY);
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || typeof o !== "object" || o.version !== 1) return null;
+      return o;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function applyChartStorageToDom() {
+    var s = loadChartSettingsFromStorage();
+    var allowedTf = { "1m": 1, "5m": 1, "15m": 1, "1h": 1, "4h": 1, "1d": 1, "3d": 1 };
+    if (s) {
+      if (s.timeframe && allowedTf[s.timeframe]) timeframeSelectTv.value = s.timeframe;
+      if (s.lookback != null && lookbackPctInput) {
+        lookbackPctInput.value = String(Math.min(200, Math.max(1, parseInt(String(s.lookback), 10) || 15)));
+      }
+      var tg = s.toggles || {};
+      CHART_TOGGLE_IDS.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el && typeof tg[id] === "boolean") el.checked = tg[id];
+      });
+      if (s.logicalRange && typeof s.logicalRange.from === "number" && typeof s.logicalRange.to === "number") {
+        restoreLogicalOnce = { from: s.logicalRange.from, to: s.logicalRange.to };
+      }
+    }
+    currentTimeframeTv = timeframeSelectTv.value;
+  }
+
+  function saveChartSettingsToStorage() {
+    var toggles = {};
+    CHART_TOGGLE_IDS.forEach(function (id) {
+      var el = document.getElementById(id);
+      toggles[id] = el ? !!el.checked : true;
+    });
+    var lr = null;
+    if (chartPrice) {
+      try {
+        lr = chartPrice.timeScale().getVisibleLogicalRange();
+      } catch (e) {}
+    }
+    var payload = {
+      version: 1,
+      timeframe: timeframeSelectTv.value,
+      lookback: getLookbackTrades(),
+      toggles: toggles,
+      logicalRange:
+        lr && lr.from != null && lr.to != null ? { from: lr.from, to: lr.to } : null,
+      savedAt: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem(CHART_TV_STORAGE_KEY, JSON.stringify(payload));
+    } catch (e) {}
+    var btn = document.getElementById("btnChartSave");
+    if (btn) {
+      var prev = btn.textContent;
+      btn.textContent = "Đã lưu";
+      btn.disabled = true;
+      window.setTimeout(function () {
+        btn.textContent = prev;
+        btn.disabled = false;
+      }, 1600);
+    }
+  }
+
+  applyChartStorageToDom();
 
   function stopPlaybackTimer() {
     if (playbackTimer) {
@@ -431,6 +513,21 @@
       });
   }
 
+  /** Chỉ giữ điểm trong [nến đầu, nến cuối] — tránh đường %change vẽ thừa sang vùng trống / autoscale lệch. */
+  function mapPctLineClampedToOhlc(ohlc, line) {
+    if (!ohlc || !ohlc.length) return [];
+    var tMin = toChartTime(ohlc[0].time);
+    var tMax = toChartTime(ohlc[ohlc.length - 1].time);
+    if (tMin == null || tMax == null) return mapPctLine(line);
+    var pts = mapPctLine(line).filter(function (x) {
+      return x.time >= tMin && x.time <= tMax;
+    });
+    pts.sort(function (a, b) {
+      return a.time - b.time;
+    });
+    return pts;
+  }
+
   function updateChartPctStat(pc) {
     const statEl = document.getElementById("chartPctChangeStat");
     if (!statEl) return;
@@ -531,9 +628,9 @@
     const pc = data.pct_change;
     if (seriesPctUpper && pc && pc.lines) {
       const L = pc.lines;
-      seriesPctUpper.setData(mapPctLine(L.upper));
-      seriesPctMid.setData(mapPctLine(L.mid));
-      seriesPctLower.setData(mapPctLine(L.lower));
+      seriesPctUpper.setData(mapPctLineClampedToOhlc(ohlc, L.upper));
+      seriesPctMid.setData(mapPctLineClampedToOhlc(ohlc, L.mid));
+      seriesPctLower.setData(mapPctLineClampedToOhlc(ohlc, L.lower));
       updateChartPctStat(pc);
     } else if (seriesPctUpper) {
       seriesPctUpper.setData([]);
@@ -582,7 +679,45 @@
 
     if (chartPrice && (forceFit || timeframeChanged || !hasInitialFit)) {
       hasInitialFit = true;
-      applyDefaultEndView();
+      if (restoreLogicalOnce && ohlc.length > 1 && playbackIndex === null) {
+        var nBar = ohlc.length;
+        var lf = Number(restoreLogicalOnce.from);
+        var lt = Number(restoreLogicalOnce.to);
+        restoreLogicalOnce = null;
+        if (Number.isFinite(lf) && Number.isFinite(lt)) {
+          var f = Math.max(0, Math.min(nBar - 1, lf));
+          var t = Math.max(0, Math.min(nBar - 1, lt));
+          if (f < t) {
+            var ro = computeRightOffsetBars();
+            runWithTimeSyncSuppressed(function () {
+              try {
+                chartPrice.timeScale().applyOptions({
+                  rightOffset: ro,
+                  barSpacing: 6,
+                  shiftVisibleRangeOnNewBar: false,
+                });
+                if (chartIndicator) {
+                  chartIndicator.timeScale().applyOptions({
+                    rightOffset: ro,
+                    barSpacing: 6,
+                    shiftVisibleRangeOnNewBar: false,
+                  });
+                }
+                chartPrice.timeScale().setVisibleLogicalRange({ from: f, to: t });
+                if (chartIndicator) chartIndicator.timeScale().setVisibleLogicalRange({ from: f, to: t });
+              } catch (e) {
+                applyDefaultEndView();
+              }
+            });
+          } else {
+            applyDefaultEndView();
+          }
+        } else {
+          applyDefaultEndView();
+        }
+      } else {
+        applyDefaultEndView();
+      }
     } else if (chartPrice) {
       restoreAfterPoll(ohlc);
     }
@@ -708,6 +843,7 @@
         axisPressedMouseMove: { time: true, price: true },
         mouseWheel: true,
         pinch: true,
+        axisDoubleClickReset: { time: false, price: false },
       },
       timeScale: tsOpts,
       rightPriceScale: { scaleMargins: { top: 0.08, bottom: 0.22 }, borderVisible: true },
@@ -721,23 +857,29 @@
     });
     seriesCandle.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.35 } });
     seriesEma = chartPrice.addLineSeries({ color: "#f2a900", lineWidth: 2 });
+    var pctNoAutoscale = function (_original) {
+      return null;
+    };
     seriesPctUpper = chartPrice.addLineSeries({
       color: "#42a5f5",
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
+      autoscaleInfoProvider: pctNoAutoscale,
     });
     seriesPctMid = chartPrice.addLineSeries({
       color: "#90a4ae",
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
+      autoscaleInfoProvider: pctNoAutoscale,
     });
     seriesPctLower = chartPrice.addLineSeries({
       color: "#7e57c2",
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
+      autoscaleInfoProvider: pctNoAutoscale,
     });
     seriesVolume = chartPrice.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "" });
     seriesVolume.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 }, borderVisible: false });
@@ -773,6 +915,7 @@
         axisPressedMouseMove: { time: true, price: true },
         mouseWheel: true,
         pinch: true,
+        axisDoubleClickReset: { time: false, price: false },
       },
       timeScale: Object.assign({}, tsOpts),
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.1 }, borderVisible: true },
@@ -848,8 +991,16 @@
       }
     });
 
+    var playbackDblClickLast = 0;
     chartPrice.subscribeClick(function (param) {
       if (!param || param.time == null || !fullKlinePayload || !fullKlinePayload.ohlc) return;
+      var now = Date.now();
+      if (now - playbackDblClickLast < 450 && playbackDblClickLast > 0) {
+        playbackDblClickLast = 0;
+      } else {
+        playbackDblClickLast = now;
+        return;
+      }
       const ohlc = fullKlinePayload.ohlc;
       let idx = -1;
       for (let i = 0; i < ohlc.length; i++) {
@@ -888,7 +1039,7 @@
       if (seriesEmaRsi) seriesEmaRsi.applyOptions({ visible: er });
       if (seriesWmaRsi) seriesWmaRsi.applyOptions({ visible: wr });
     }
-    ["togVolume", "togEma", "togPctChange", "togRsi", "togEmaRsi", "togWmaRsi", "togAtr"].forEach(function (id) {
+    CHART_TOGGLE_IDS.forEach(function (id) {
       const el = document.getElementById(id);
       if (el) el.addEventListener("change", applyToggles);
     });
@@ -977,6 +1128,13 @@
   document.getElementById("btnPlaybackPause").addEventListener("click", function () {
     stopPlaybackTimer();
   });
+
+  var btnChartSave = document.getElementById("btnChartSave");
+  if (btnChartSave) {
+    btnChartSave.addEventListener("click", function () {
+      saveChartSettingsToStorage();
+    });
+  }
 
   window.fetchKlinesTv = fetchKlinesTv;
   window.applyMarkersTv = applyMarkersTv;
