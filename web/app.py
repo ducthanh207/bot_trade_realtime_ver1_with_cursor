@@ -9,6 +9,7 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 import csv
+import hashlib
 import io
 from flask import Flask, jsonify, request, render_template, Response, redirect, url_for
 from datetime import datetime, timezone
@@ -236,6 +237,25 @@ def api_status():
             d["paper2_lookback_display"] = int(getattr(_cfg, "LOOKBACK_TRADES", 15))
     except Exception:
         d["paper2_lookback_display"] = 15
+    try:
+        from config import settings as _cfg2
+        d["taker_fee"] = float(getattr(_cfg2, "TAKER_FEE", 0.0004))
+    except Exception:
+        d["taker_fee"] = 0.0004
+    try:
+        from config import settings as _ctf
+        _tfee = float(getattr(_ctf, "TAKER_FEE", 0.0004))
+        _lt1 = list(d.get("paper_trades") or [])
+        _lt2 = list(d.get("paper2_trades") or [])
+        d["paper_replay_initial"] = _infer_initial_capital(
+            _lt1, float(d.get("paper_initial_capital") or 0), _tfee
+        )
+        d["paper2_replay_initial"] = _infer_initial_capital(
+            _lt2, float(d.get("paper2_initial_capital") or 0), _tfee
+        )
+    except Exception:
+        d["paper_replay_initial"] = float(d.get("paper_initial_capital") or 0)
+        d["paper2_replay_initial"] = float(d.get("paper2_initial_capital") or 0)
     return jsonify(d)
 
 
@@ -788,6 +808,60 @@ def _pct_pnl_capital(profit: float, capital_before: float) -> float:
     return round((profit / capital_before * 100), 2) if capital_before and capital_before != 0 else 0.0
 
 
+def _trade_key_closed(t: dict) -> str:
+    """Khóa ổn định cho một lệnh đã đóng (ẩn/lưu UI)."""
+    parts = [
+        str(t.get("entry_time", "")),
+        str(t.get("exit_time", "")),
+        str(t.get("entry_price", "")),
+        str(t.get("exit_price", "")),
+        str(t.get("side", "")),
+        format(float(t.get("profit", 0) or 0), ".8f"),
+    ]
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _infer_initial_capital(trades_chrono: list, state_initial: float, taker_fee: float) -> float:
+    """Vốn ban đầu: từ state, hoặc suy ra từ lệnh đầu nếu state = 0."""
+    ini = float(state_initial or 0)
+    if ini > 0 or not trades_chrono:
+        return ini
+    t0 = trades_chrono[0]
+    entry = float(t0.get("entry_price") or 0)
+    size = float(t0.get("size") or 0)
+    cb = float(t0.get("capital_before") or 0)
+    fee0 = size * entry * float(taker_fee) if size and entry else 0.0
+    return cb + fee0
+
+
+def _paper_ledger_meta(trades_chrono: list, initial: float, taker_fee: float) -> list:
+    """
+    Replay sổ cái theo thứ tự thời gian (cũ → mới).
+    Mỗi lệnh: trừ phí vào, cộng profit đóng — Cap After khớp initial + Σprofit - Σphí vào.
+    %PnL vốn dùng vốn tài khoản *trước* khi trừ phí vào (đồng bộ với lúc mở lệnh trên bot).
+    """
+    run = float(initial or 0)
+    out = []
+    for idx, t in enumerate(trades_chrono):
+        entry = float(t.get("entry_price") or 0)
+        size = float(t.get("size") or 0)
+        profit = float(t.get("profit") or 0)
+        fee_in = size * entry * float(taker_fee) if size and entry else 0.0
+        cap_equity_before_open = run
+        run -= fee_in
+        run += profit
+        out.append(
+            {
+                "replay_index": idx,
+                "trade_key": _trade_key_closed(t),
+                "capital_equity_before_open": round(cap_equity_before_open, 2),
+                "capital_after_close": round(run, 2),
+                "fee_entry": round(fee_in, 8),
+            }
+        )
+    return out
+
+
 def _effective_margin(entry: float, size: float, leverage: float, stored_margin=None, capital_before=None):
     """Vốn vào lệnh (margin) = notional/leverage. Nếu stored sai (vd > capital) thì dùng margin_calc."""
     margin_calc = (entry * size) / float(leverage) if (entry and size and leverage) else None
@@ -815,6 +889,15 @@ def _orders_json_for_slot(slot: int):
         open_trade = status.get("paper_open_trade")
         trades = list(status.get("paper_trades") or [])
         leverage = state.get_paper_leverage() or getattr(settings, "LEVERAGE", 20.0)
+    chronological = list(trades)
+    taker_fee = float(getattr(settings, "TAKER_FEE", 0.0004))
+    if slot == 2:
+        init_cap = float(status.get("paper2_initial_capital") or 0)
+    else:
+        init_cap = float(status.get("paper_initial_capital") or 0)
+    initial = _infer_initial_capital(chronological, init_cap, taker_fee)
+    meta = _paper_ledger_meta(chronological, initial, taker_fee)
+
     current_price = None
     if open_trade:
         try:
@@ -854,18 +937,25 @@ def _orders_json_for_slot(slot: int):
             "is_open": True,
             "symbol": settings.SYMBOL,
             "exit_reason": None,
+            "trade_key": "open",
+            "replay_index": -1,
+            "size": size,
         })
+    n = len(trades)
     for i, t in enumerate(reversed(trades)):
+        idx = n - 1 - i
+        lm = meta[idx] if idx < len(meta) else {}
         profit = float(t.get("profit", 0))
-        cap_before = float(t.get("capital_before") or 0)
-        cap_after = t.get("capital_after")
+        cap_before_stored = float(t.get("capital_before") or 0)
+        cap_after = lm.get("capital_after_close")
         if cap_after is not None:
             cap_after = round(float(cap_after), 2)
         entry_px = float(t.get("entry_price") or 0)
         size = float(t.get("size") or 0)
-        margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before)
+        margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before_stored)
         pct_pnl = _pct_pnl(profit, margin_t) if margin_t else None
-        pct_pnl_capital = _pct_pnl_capital(profit, cap_before) if cap_before else None
+        cap_eq = float(lm.get("capital_equity_before_open") or 0)
+        pct_pnl_capital = _pct_pnl_capital(profit, cap_eq) if cap_eq else None
         orders.append({
             "id": len(orders) + 1,
             "side": str(t.get("side", "")).upper(),
@@ -880,6 +970,9 @@ def _orders_json_for_slot(slot: int):
             "is_open": False,
             "symbol": settings.SYMBOL,
             "exit_reason": t.get("exit_reason"),
+            "trade_key": lm.get("trade_key") or _trade_key_closed(t),
+            "replay_index": int(lm.get("replay_index", idx)),
+            "size": size,
         })
     return orders, None
 
@@ -914,6 +1007,15 @@ def _orders_for_csv(slot: int = 1):
         trades = list(status.get("paper_trades") or [])
         leverage = state.get_paper_leverage() or getattr(settings, "LEVERAGE", 20.0)
     symbol = getattr(settings, "SYMBOL", "BTCUSDT")
+    chronological = list(trades)
+    taker_fee = float(getattr(settings, "TAKER_FEE", 0.0004))
+    if slot == 2:
+        init_cap = float(status.get("paper2_initial_capital") or 0)
+    else:
+        init_cap = float(status.get("paper_initial_capital") or 0)
+    initial = _infer_initial_capital(chronological, init_cap, taker_fee)
+    meta = _paper_ledger_meta(chronological, initial, taker_fee)
+    n_csv = len(trades)
 
     def _ts(v):
         if v is None:
@@ -952,16 +1054,19 @@ def _orders_for_csv(slot: int = 1):
             "exit_wma_rsi": "",
         })
     for i, t in enumerate(reversed(trades)):
+        idx = n_csv - 1 - i
+        lm = meta[idx] if idx < len(meta) else {}
         profit = float(t.get("profit", 0))
         cap_before = float(t.get("capital_before") or 0)
-        cap_after = t.get("capital_after")
+        cap_after = lm.get("capital_after_close")
         if cap_after is not None:
             cap_after = round(float(cap_after), 2)
         entry_px = float(t.get("entry_price") or 0)
         size = float(t.get("size") or 0)
         margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before)
         pct_pnl = _pct_pnl(profit, margin_t) if margin_t else ""
-        pct_pnl_capital = _pct_pnl_capital(profit, cap_before) if cap_before else ""
+        cap_eq = float(lm.get("capital_equity_before_open") or 0)
+        pct_pnl_capital = _pct_pnl_capital(profit, cap_eq) if cap_eq else ""
         rows.append({
             "id": len(rows) + 1,
             "symbol": symbol,

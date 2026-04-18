@@ -149,7 +149,8 @@ body {
   background: #1e222d;
   overflow: hidden;
 }
-.orders-panel h3 {
+.orders-panel h3,
+.orders-panel h3.orders-panel-title {
   margin: 0;
   padding: 10px 12px;
   font-size: 14px;
@@ -159,8 +160,16 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
 }
-.orders-panel .btn-export {
+.orders-panel .orders-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.orders-panel .btn-export,
+.orders-panel .btn-save-hidden {
   padding: 6px 10px;
   font-size: 12px;
   background: #2a2e39;
@@ -168,6 +177,34 @@ body {
   border: 1px solid #363a45;
   border-radius: 4px;
   cursor: pointer;
+}
+.orders-panel .btn-save-hidden {
+  background: #3949ab;
+  border-color: #5c6bc0;
+  color: #fff;
+}
+.orders-panel .btn-toggle-hide {
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1.2;
+  background: transparent;
+  border: 1px solid #363a45;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #d1d4dc;
+}
+.orders-panel .btn-toggle-hide:hover {
+  background: #2a2e39;
+  border-color: #787b86;
+}
+.orders-panel .btn-toggle-hide.is-hidden {
+  opacity: 0.45;
+  color: #787b86;
+}
+.orders-panel .orders-table th.th-hide,
+.orders-panel .orders-table td.td-hide {
+  text-align: center;
+  width: 44px;
 }
 .orders-table-wrap {
   flex: 1;
@@ -197,6 +234,14 @@ body {
 }
 .orders-table tr.pnl-positive { background: rgba(38, 166, 154, 0.15); }
 .orders-table tr.pnl-negative { background: rgba(239, 83, 80, 0.15); }
+.orders-table tr.is-row-hidden td:not(.td-hide) {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+.orders-table tr.is-row-hidden td.td-hide {
+  opacity: 1;
+  text-decoration: none;
+}
 .orders-table .pnl-pos { color: #26a69a; }
 .orders-table .pnl-neg { color: #ef5350; }
 .orders-table .btn-close-order {

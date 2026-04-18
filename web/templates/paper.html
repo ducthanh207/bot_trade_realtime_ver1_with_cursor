@@ -28,12 +28,18 @@
     </div>
   </header>
   <aside class="orders-panel">
-    <h3>Lệnh (mới nhất trên cùng) <button type="button" class="btn-export" id="btnExportCsv">Xuất CSV</button></h3>
+    <h3 class="orders-panel-title">
+      <span class="orders-title-text">Lệnh (mới nhất trên cùng)</span>
+      <span class="orders-title-actions">
+        <button type="button" class="btn-save-hidden" id="btnSaveHidden" title="Lưu danh sách lệnh ẩn (giữ khi F5)">Lưu</button>
+        <button type="button" class="btn-export" id="btnExportCsv">Xuất CSV</button>
+      </span>
+    </h3>
     <div class="orders-table-wrap">
       <table class="orders-table">
         <thead>
           <tr>
-            <th>ID</th><th>Symbol</th><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>Profit</th><th>% PnL</th><th>%PnL vốn</th><th>Cap After</th><th>Reason</th><th>Thao tác</th>
+            <th>ID</th><th>Symbol</th><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>Profit</th><th>% PnL</th><th>%PnL vốn</th><th>Cap After</th><th>Reason</th><th>Thao tác</th><th class="th-hide">Ẩn</th>
           </tr>
         </thead>
         <tbody id="ordersBody"></tbody>

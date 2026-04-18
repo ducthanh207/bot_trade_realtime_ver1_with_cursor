@@ -11,9 +11,132 @@
   var statusBadge = document.getElementById("statusBadge");
   var ordersBody = document.getElementById("ordersBody");
 
+  var lastStatus = null;
+  var lastOrders = [];
+
   function field(d, name) {
     var k = prefix + "_" + name;
     return d[k];
+  }
+
+  function hiddenStorageKey() {
+    return "bot_paper_hidden_trade_keys_" + slot;
+  }
+
+  function loadHiddenMap() {
+    var m = {};
+    try {
+      var raw = localStorage.getItem(hiddenStorageKey());
+      var arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) {
+        for (var i = 0; i < arr.length; i++) {
+          if (arr[i]) m[String(arr[i])] = true;
+        }
+      }
+    } catch (e) {}
+    return m;
+  }
+
+  var hiddenMap = loadHiddenMap();
+
+  function persistHidden() {
+    try {
+      var keys = Object.keys(hiddenMap);
+      localStorage.setItem(hiddenStorageKey(), JSON.stringify(keys));
+    } catch (e) {}
+  }
+
+  function clearHiddenStorage() {
+    hiddenMap = {};
+    try {
+      localStorage.removeItem(hiddenStorageKey());
+    } catch (e) {}
+  }
+
+  function chronosClosed(orders) {
+    var closed = orders.filter(function (o) {
+      return !o.is_open;
+    });
+    closed.sort(function (a, b) {
+      var ra = a.replay_index != null ? Number(a.replay_index) : 0;
+      var rb = b.replay_index != null ? Number(b.replay_index) : 0;
+      return ra - rb;
+    });
+    return closed;
+  }
+
+  function hasHiddenActive(chronoClosed, hm) {
+    for (var i = 0; i < chronoClosed.length; i++) {
+      var tk = String(chronoClosed[i].trade_key || "");
+      if (tk && hm[tk]) return true;
+    }
+    return false;
+  }
+
+  function replayBalanceAfterVisible(chronoClosed, hm, initial, takerFee) {
+    var run = Number(initial) || 0;
+    for (var i = 0; i < chronoClosed.length; i++) {
+      var o = chronoClosed[i];
+      var tk = String(o.trade_key || "");
+      if (hm[tk]) continue;
+      var entry = Number(o.entry_price) || 0;
+      var size = Number(o.size) || 0;
+      var feeIn = size * entry * takerFee;
+      run -= feeIn;
+      run += Number(o.pnl) || 0;
+    }
+    return run;
+  }
+
+  function computeOverrides(d, orders) {
+    if (!d) return null;
+    var taker = Number(d.taker_fee);
+    if (!isFinite(taker) || taker < 0) taker = 0.0004;
+    var iniReplay = field(d, "replay_initial");
+    var iniState = field(d, "initial_capital");
+    var initial = Number(iniReplay);
+    if (!isFinite(initial) || initial <= 0) initial = Number(iniState) || 0;
+    var chrono = chronosClosed(orders);
+    if (!hasHiddenActive(chrono, hiddenMap)) return null;
+
+    var visible = chrono.filter(function (o) {
+      return !hiddenMap[String(o.trade_key || "")];
+    });
+    var done = visible.length;
+    var wins = 0;
+    var sumPnl = 0;
+    for (var j = 0; j < visible.length; j++) {
+      var p = Number(visible[j].pnl) || 0;
+      sumPnl += p;
+      if (p > 0) wins++;
+    }
+    var wr = done > 0 ? (wins / done) * 100 : 0;
+    var hasOpen = orders.some(function (o) {
+      return o.is_open;
+    });
+    var synBal = replayBalanceAfterVisible(chrono, hiddenMap, initial, taker);
+    if (hasOpen) {
+      return {
+        trades_done: done,
+        winrate: Math.round(wr * 100) / 100,
+        total_pnl: Math.round(sumPnl * 100) / 100,
+        balance: Number(field(d, "balance")) || 0,
+        pnl_open: Number(field(d, "pnl_open")) || 0,
+        capital_open:
+          field(d, "capital_open") != null
+            ? Number(field(d, "capital_open"))
+            : Number(field(d, "balance")) || 0,
+      };
+    }
+    var b = Math.round(synBal * 100) / 100;
+    return {
+      trades_done: done,
+      winrate: Math.round(wr * 100) / 100,
+      total_pnl: Math.round(sumPnl * 100) / 100,
+      balance: b,
+      pnl_open: 0,
+      capital_open: b,
+    };
   }
 
   function setStatusBadge(s) {
@@ -39,37 +162,70 @@
     }
   }
 
-  function updateOverview(d) {
+  function updateOverview(d, overrides) {
     document.getElementById("statStarted").textContent =
       "Bắt đầu: " + (field(d, "started_at") ? formatDate(field(d, "started_at")) : "—");
-    document.getElementById("statTradesDone").textContent =
-      "Lệnh đã hoàn thành: " + (field(d, "trades_count") || 0);
+
+    var done =
+      overrides && overrides.trades_done != null
+        ? overrides.trades_done
+        : field(d, "trades_count") || 0;
+    document.getElementById("statTradesDone").textContent = "Lệnh đã hoàn thành: " + done;
+
     document.getElementById("statOrdersOpen").textContent =
       "Lệnh_Open: " + (field(d, "orders_open_count") != null ? field(d, "orders_open_count") : 0);
+
+    var wr =
+      overrides && overrides.winrate != null
+        ? overrides.winrate
+        : field(d, "winrate") != null
+          ? field(d, "winrate")
+          : 0;
     document.getElementById("statWinrate").textContent =
-      "Winrate: " + (field(d, "winrate") != null ? field(d, "winrate") : 0) + "%";
-    var pnl = field(d, "total_pnl") != null ? field(d, "total_pnl") : 0;
+      "Winrate: " + Number(wr).toFixed(2) + "%";
+
+    var pnl =
+      overrides && overrides.total_pnl != null
+        ? overrides.total_pnl
+        : field(d, "total_pnl") != null
+          ? field(d, "total_pnl")
+          : 0;
     var elPnl = document.getElementById("statPnl");
-    elPnl.textContent = "PNL: " + pnl.toFixed(2);
+    elPnl.textContent = "PNL: " + Number(pnl).toFixed(2);
     elPnl.className = "stat " + (pnl >= 0 ? "positive" : "negative");
-    var pnlOpen = field(d, "pnl_open") != null ? field(d, "pnl_open") : 0;
+
+    var pnlOpen =
+      overrides && overrides.pnl_open != null
+        ? overrides.pnl_open
+        : field(d, "pnl_open") != null
+          ? field(d, "pnl_open")
+          : 0;
     var elPnlOpen = document.getElementById("statPnlOpen");
-    elPnlOpen.textContent = "PNL_Open: " + pnlOpen.toFixed(2);
+    elPnlOpen.textContent = "PNL_Open: " + Number(pnlOpen).toFixed(2);
     elPnlOpen.className = "stat " + (pnlOpen >= 0 ? "positive" : "negative");
-    document.getElementById("statBalance").textContent =
-      "Vốn: " + (field(d, "balance") != null ? field(d, "balance") : 0).toFixed(2);
+
+    var bal =
+      overrides && overrides.balance != null
+        ? overrides.balance
+        : field(d, "balance") != null
+          ? field(d, "balance")
+          : 0;
+    document.getElementById("statBalance").textContent = "Vốn: " + Number(bal).toFixed(2);
+
+    var capOpen =
+      overrides && overrides.capital_open != null
+        ? overrides.capital_open
+        : field(d, "capital_open") != null
+          ? field(d, "capital_open")
+          : field(d, "balance") || 0;
     document.getElementById("statCapitalOpen").textContent =
-      "Capital_Open: " +
-      (field(d, "capital_open") != null
-        ? field(d, "capital_open")
-        : field(d, "balance") || 0
-      ).toFixed(2);
+      "Capital_Open: " + Number(capOpen).toFixed(2);
+
     setStatusBadge(field(d, "status") || "stopped");
     var levEl = document.getElementById("inputLeverage");
     var pctEl = document.getElementById("inputWalletPct");
     var lbEl = document.getElementById("inputPctLookback");
     var ae = document.activeElement;
-    // Không ghi đè ô đang gõ (poll trước đây mỗi 1s khiến không sửa được lookback / vốn)
     if (levEl != null && ae !== levEl)
       levEl.value = field(d, "leverage_display") != null ? Number(field(d, "leverage_display")) : 20;
     if (pctEl != null && ae !== pctEl)
@@ -86,86 +242,121 @@
     }
   }
 
-  function fetchOrders() {
+  function bindCloseButtons() {
+    ordersBody.querySelectorAll(".btn-close-order").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (!confirm("Chốt lệnh đang mở?")) return;
+        fetch(apiBase + "/close", { method: "POST" })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (d2) {
+            if (d2.ok) refresh();
+            else alert(d2.error || "Lỗi");
+          })
+          .catch(function () {
+            alert("Lỗi kết nối");
+          });
+      });
+    });
+  }
+
+  function bindHideButtons() {
+    ordersBody.querySelectorAll(".btn-toggle-hide").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var tk = btn.getAttribute("data-trade-key");
+        if (!tk) return;
+        if (hiddenMap[tk]) delete hiddenMap[tk];
+        else hiddenMap[tk] = true;
+        persistHidden();
+        renderOrders(lastOrders);
+        if (lastStatus) updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
+      });
+    });
+  }
+
+  function renderOrders(orders) {
+    ordersBody.innerHTML = orders
+      .map(function (o, idx) {
+        var pnl = o.pnl != null ? o.pnl : 0;
+        var rowClass = pnl >= 0 ? "pnl-positive" : "pnl-negative";
+        var tk = String(o.trade_key || "");
+        var isH = !o.is_open && tk && hiddenMap[tk];
+        if (isH) rowClass += " is-row-hidden";
+        var pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
+        var pnlStr = (pnl >= 0 ? "+" : "") + Number(pnl).toFixed(2);
+        var pctVal = o.pct_pnl != null ? Number(o.pct_pnl) : null;
+        var pctPnl =
+          pctVal != null ? (pctVal >= 0 ? "+" : "") + pctVal.toFixed(2) + "%" : "—";
+        var pctCapVal = o.pct_pnl_capital != null ? Number(o.pct_pnl_capital) : null;
+        var pctPnlCapital =
+          pctCapVal != null ? (pctCapVal >= 0 ? "+" : "") + pctCapVal.toFixed(2) + "%" : "—";
+        var capAfter = o.capital_after != null ? Number(o.capital_after).toFixed(2) : "—";
+        var id = o.is_open ? "•" : o.id != null ? o.id : idx + 1;
+        var actionCell = o.is_open
+          ? '<td><button type="button" class="btn-close-order" data-open="1">Chốt lệnh</button></td>'
+          : "<td></td>";
+        var hideCell = o.is_open
+          ? '<td class="td-hide">—</td>'
+          : '<td class="td-hide"><button type="button" class="btn-toggle-hide' +
+            (isH ? " is-hidden" : "") +
+            '" data-trade-key="' +
+            tk +
+            '" title="Ẩn/Hiện lệnh (không tính vào thống kê trên khi đang ẩn)">👁</button></td>';
+        return (
+          '<tr class="' +
+          rowClass +
+          '"><td>' +
+          id +
+          "</td><td>" +
+          (o.symbol || "") +
+          "</td><td>" +
+          (o.side || "") +
+          (o.is_open ? " (mở)" : "") +
+          "</td><td>" +
+          formatDate(o.entry_time) +
+          "</td><td>" +
+          (o.entry_price != null ? Number(o.entry_price).toFixed(2) : "") +
+          "</td><td>" +
+          formatDate(o.exit_time) +
+          "</td><td>" +
+          (o.exit_price != null ? Number(o.exit_price).toFixed(2) : "") +
+          '</td><td class="' +
+          pnlClass +
+          '">' +
+          pnlStr +
+          '</td><td class="' +
+          pnlClass +
+          '">' +
+          pctPnl +
+          '</td><td class="' +
+          pnlClass +
+          '">' +
+          pctPnlCapital +
+          "</td><td>" +
+          capAfter +
+          "</td><td>" +
+          (o.exit_reason || "—") +
+          "</td>" +
+          actionCell +
+          hideCell +
+          "</tr>"
+        );
+      })
+      .join("");
+    bindCloseButtons();
+    bindHideButtons();
+  }
+
+  function fetchOrdersAndRefreshBar() {
     fetch("/api/orders?slot=" + encodeURIComponent(String(slot)))
       .then(function (r) {
         return r.json();
       })
       .then(function (data) {
-        var orders = data.orders || [];
-        ordersBody.innerHTML = orders
-          .map(function (o, idx) {
-            var pnl = o.pnl != null ? o.pnl : 0;
-            var rowClass = pnl >= 0 ? "pnl-positive" : "pnl-negative";
-            var pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
-            var pnlStr = (pnl >= 0 ? "+" : "") + pnl.toFixed(2);
-            var pctVal = o.pct_pnl != null ? Number(o.pct_pnl) : null;
-            var pctPnl =
-              pctVal != null ? (pctVal >= 0 ? "+" : "") + pctVal.toFixed(2) + "%" : "—";
-            var pctCapVal = o.pct_pnl_capital != null ? Number(o.pct_pnl_capital) : null;
-            var pctPnlCapital =
-              pctCapVal != null ? (pctCapVal >= 0 ? "+" : "") + pctCapVal.toFixed(2) + "%" : "—";
-            var capAfter = o.capital_after != null ? Number(o.capital_after).toFixed(2) : "—";
-            var id = o.is_open ? "•" : o.id != null ? o.id : idx + 1;
-            var actionCell = o.is_open
-              ? '<td><button type="button" class="btn-close-order" data-open="1">Chốt lệnh</button></td>'
-              : "<td></td>";
-            return (
-              '<tr class="' +
-              rowClass +
-              '"><td>' +
-              id +
-              "</td><td>" +
-              (o.symbol || "") +
-              "</td><td>" +
-              (o.side || "") +
-              (o.is_open ? " (mở)" : "") +
-              "</td><td>" +
-              formatDate(o.entry_time) +
-              "</td><td>" +
-              (o.entry_price != null ? Number(o.entry_price).toFixed(2) : "") +
-              "</td><td>" +
-              formatDate(o.exit_time) +
-              "</td><td>" +
-              (o.exit_price != null ? Number(o.exit_price).toFixed(2) : "") +
-              '</td><td class="' +
-              pnlClass +
-              '">' +
-              pnlStr +
-              '</td><td class="' +
-              pnlClass +
-              '">' +
-              pctPnl +
-              '</td><td class="' +
-              pnlClass +
-              '">' +
-              pctPnlCapital +
-              "</td><td>" +
-              capAfter +
-              "</td><td>" +
-              (o.exit_reason || "—") +
-              "</td>" +
-              actionCell +
-              "</tr>"
-            );
-          })
-          .join("");
-        ordersBody.querySelectorAll(".btn-close-order").forEach(function (btn) {
-          btn.addEventListener("click", function () {
-            if (!confirm("Chốt lệnh đang mở?")) return;
-            fetch(apiBase + "/close", { method: "POST" })
-              .then(function (r) {
-                return r.json();
-              })
-              .then(function (d) {
-                if (d.ok) refresh();
-                else alert(d.error || "Lỗi");
-              })
-              .catch(function () {
-                alert("Lỗi kết nối");
-              });
-          });
-        });
+        lastOrders = data.orders || [];
+        renderOrders(lastOrders);
+        if (lastStatus) updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
       })
       .catch(function () {});
   }
@@ -176,8 +367,16 @@
         return r.json();
       })
       .then(function (d) {
-        updateOverview(d);
-        fetchOrders();
+        lastStatus = d;
+        return fetch("/api/orders?slot=" + encodeURIComponent(String(slot)));
+      })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        lastOrders = data.orders || [];
+        updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
+        renderOrders(lastOrders);
       })
       .catch(function () {});
   }
@@ -222,6 +421,13 @@
         if (d.ok) refresh();
       });
   });
+  var btnSaveHidden = document.getElementById("btnSaveHidden");
+  if (btnSaveHidden) {
+    btnSaveHidden.addEventListener("click", function () {
+      persistHidden();
+      alert("Đã lưu danh sách ẩn/hiện lệnh (trình duyệt).");
+    });
+  }
   document.getElementById("btnClearHistory").addEventListener("click", function () {
     if (!confirm("Xóa toàn bộ lịch sử lệnh? Vốn và trạng thái sẽ reset. Bạn có chắc?")) return;
     fetch(apiBase + "/clear-history", { method: "POST" })
@@ -230,6 +436,7 @@
       })
       .then(function (d) {
         if (d.ok) {
+          clearHiddenStorage();
           refresh();
           alert(d.message || "Đã xóa toàn bộ lịch sử lệnh.");
         } else alert(d.error || "Lỗi");
@@ -331,5 +538,5 @@
   refresh();
   checkRestorePending();
   setInterval(refresh, INTERVAL_MS);
-  setInterval(fetchOrders, ORDERS_REFRESH_MS);
+  setInterval(fetchOrdersAndRefreshBar, ORDERS_REFRESH_MS);
 })();
