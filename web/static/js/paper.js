@@ -53,9 +53,14 @@
     } catch (e) {}
   }
 
+  /** JSON/API đôi khi trả is_open không chuẩn — chỉ coi true/1 là đang mở. */
+  function orderIsOpen(o) {
+    return !!o && (o.is_open === true || o.is_open === 1);
+  }
+
   function chronosClosed(orders) {
     var closed = orders.filter(function (o) {
-      return !o.is_open;
+      return !orderIsOpen(o);
     });
     closed.sort(function (a, b) {
       var ra = a.replay_index != null ? Number(a.replay_index) : 0;
@@ -65,9 +70,12 @@
     return closed;
   }
 
-  function hasHiddenActive(chronoClosed, hm) {
-    for (var i = 0; i < chronoClosed.length; i++) {
-      var tk = String(chronoClosed[i].trade_key || "");
+  /** Có ít nhất một lệnh đóng hiện trong list đang bị ẩn. */
+  function hasHiddenActive(orders, hm) {
+    for (var i = 0; i < orders.length; i++) {
+      var o = orders[i];
+      if (orderIsOpen(o)) continue;
+      var tk = String(o.trade_key || "");
       if (tk && hm[tk]) return true;
     }
     return false;
@@ -97,7 +105,7 @@
     var initial = Number(iniReplay);
     if (!isFinite(initial) || initial <= 0) initial = Number(iniState) || 0;
     var chrono = chronosClosed(orders);
-    if (!hasHiddenActive(chrono, hiddenMap)) return null;
+    if (!hasHiddenActive(orders, hiddenMap)) return null;
 
     var visible = chrono.filter(function (o) {
       return !hiddenMap[String(o.trade_key || "")];
@@ -111,21 +119,18 @@
       if (p > 0) wins++;
     }
     var wr = done > 0 ? (wins / done) * 100 : 0;
-    var hasOpen = orders.some(function (o) {
-      return o.is_open;
-    });
+    var hasOpen = orders.some(orderIsOpen);
     var synBal = replayBalanceAfterVisible(chrono, hiddenMap, initial, taker);
     if (hasOpen) {
+      var pOpen = Number(field(d, "pnl_open")) || 0;
+      var syn = Math.round(synBal * 100) / 100;
       return {
         trades_done: done,
         winrate: Math.round(wr * 100) / 100,
         total_pnl: Math.round(sumPnl * 100) / 100,
-        balance: Number(field(d, "balance")) || 0,
-        pnl_open: Number(field(d, "pnl_open")) || 0,
-        capital_open:
-          field(d, "capital_open") != null
-            ? Number(field(d, "capital_open"))
-            : Number(field(d, "balance")) || 0,
+        balance: syn,
+        pnl_open: pOpen,
+        capital_open: Math.round((syn + pOpen) * 100) / 100,
       };
     }
     var b = Math.round(synBal * 100) / 100;
@@ -261,18 +266,9 @@
     });
   }
 
-  function bindHideButtons() {
-    ordersBody.querySelectorAll(".btn-toggle-hide").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var tk = btn.getAttribute("data-trade-key");
-        if (!tk) return;
-        if (hiddenMap[tk]) delete hiddenMap[tk];
-        else hiddenMap[tk] = true;
-        persistHidden();
-        renderOrders(lastOrders);
-        if (lastStatus) updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
-      });
-    });
+  function syncOverviewBar() {
+    if (!lastStatus) return;
+    updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
   }
 
   function renderOrders(orders) {
@@ -281,7 +277,7 @@
         var pnl = o.pnl != null ? o.pnl : 0;
         var rowClass = pnl >= 0 ? "pnl-positive" : "pnl-negative";
         var tk = String(o.trade_key || "");
-        var isH = !o.is_open && tk && hiddenMap[tk];
+        var isH = !orderIsOpen(o) && tk && hiddenMap[tk];
         if (isH) rowClass += " is-row-hidden";
         var pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
         var pnlStr = (pnl >= 0 ? "+" : "") + Number(pnl).toFixed(2);
@@ -292,11 +288,11 @@
         var pctPnlCapital =
           pctCapVal != null ? (pctCapVal >= 0 ? "+" : "") + pctCapVal.toFixed(2) + "%" : "—";
         var capAfter = o.capital_after != null ? Number(o.capital_after).toFixed(2) : "—";
-        var id = o.is_open ? "•" : o.id != null ? o.id : idx + 1;
-        var actionCell = o.is_open
+        var id = orderIsOpen(o) ? "•" : o.id != null ? o.id : idx + 1;
+        var actionCell = orderIsOpen(o)
           ? '<td><button type="button" class="btn-close-order" data-open="1">Chốt lệnh</button></td>'
           : "<td></td>";
-        var hideCell = o.is_open
+        var hideCell = orderIsOpen(o)
           ? '<td class="td-hide">—</td>'
           : '<td class="td-hide"><button type="button" class="btn-toggle-hide' +
             (isH ? " is-hidden" : "") +
@@ -312,7 +308,7 @@
           (o.symbol || "") +
           "</td><td>" +
           (o.side || "") +
-          (o.is_open ? " (mở)" : "") +
+          (orderIsOpen(o) ? " (mở)" : "") +
           "</td><td>" +
           formatDate(o.entry_time) +
           "</td><td>" +
@@ -345,7 +341,6 @@
       })
       .join("");
     bindCloseButtons();
-    bindHideButtons();
   }
 
   function fetchOrdersAndRefreshBar() {
@@ -356,7 +351,7 @@
       .then(function (data) {
         lastOrders = data.orders || [];
         renderOrders(lastOrders);
-        if (lastStatus) updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
+        syncOverviewBar();
       })
       .catch(function () {});
   }
@@ -375,8 +370,8 @@
       })
       .then(function (data) {
         lastOrders = data.orders || [];
-        updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
         renderOrders(lastOrders);
+        syncOverviewBar();
       })
       .catch(function () {});
   }
@@ -425,6 +420,7 @@
   if (btnSaveHidden) {
     btnSaveHidden.addEventListener("click", function () {
       persistHidden();
+      syncOverviewBar();
       alert("Đã lưu danh sách ẩn/hiện lệnh (trình duyệt).");
     });
   }
@@ -534,6 +530,21 @@
       })
       .catch(function () {});
   }
+
+  ordersBody.addEventListener("click", function (ev) {
+    var tgt = ev.target;
+    if (!tgt || typeof tgt.closest !== "function") return;
+    var hideBtn = tgt.closest(".btn-toggle-hide");
+    if (!hideBtn) return;
+    ev.preventDefault();
+    var tk = String(hideBtn.getAttribute("data-trade-key") || "").trim();
+    if (!tk) return;
+    if (hiddenMap[tk]) delete hiddenMap[tk];
+    else hiddenMap[tk] = true;
+    persistHidden();
+    renderOrders(lastOrders);
+    syncOverviewBar();
+  });
 
   refresh();
   checkRestorePending();
