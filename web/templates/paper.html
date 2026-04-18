@@ -28,6 +28,20 @@
     </div>
   </header>
   <aside class="orders-panel">
+    <div class="paper-charts-row" aria-label="Biểu đồ paper">
+      <div class="paper-chart-box">
+        <div class="paper-chart-title">Vốn theo thời gian</div>
+        <div class="paper-chart-scroll" id="paperChartCapitalScroll">
+          <canvas id="paperChartCapital" width="400" height="150"></canvas>
+        </div>
+      </div>
+      <div class="paper-chart-box">
+        <div class="paper-chart-title">Profit từng lệnh (theo thứ tự lệnh)</div>
+        <div class="paper-chart-scroll" id="paperChartProfitScroll">
+          <canvas id="paperChartProfit" width="400" height="150"></canvas>
+        </div>
+      </div>
+    </div>
     <h3 class="orders-panel-title">
       <span class="orders-title-text">Lệnh (mới nhất trên cùng)</span>
       <span class="orders-title-actions">
@@ -52,5 +66,6 @@
 <script>
   window.PAPER_UI = { slot: 1, prefix: "paper", apiBase: "/api/paper" };
 </script>
+<script src="{{ url_for('static', filename='js/paper_charts.js') }}"></script>
 <script src="{{ url_for('static', filename='js/paper.js') }}"></script>
 {% endblock %}

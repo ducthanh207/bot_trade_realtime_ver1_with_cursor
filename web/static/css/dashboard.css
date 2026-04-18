@@ -149,6 +149,47 @@ body {
   background: #1e222d;
   overflow: hidden;
 }
+
+/* Hai chart paper — cùng chiều ngang với list, cuộn ngang khi dữ liệu dài */
+.paper-charts-row {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  width: 100%;
+  flex: 0 0 auto;
+  padding: 8px 12px 6px;
+  box-sizing: border-box;
+  background: #1e222d;
+  border-bottom: 1px solid #2a2e39;
+}
+.paper-chart-box {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.paper-chart-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #787b86;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.paper-chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  width: 100%;
+  max-height: 168px;
+  border: 1px solid #2a2e39;
+  border-radius: 4px;
+  background: #131722;
+  -webkit-overflow-scrolling: touch;
+}
+.paper-chart-scroll canvas {
+  display: block;
+}
 .orders-panel h3,
 .orders-panel h3.orders-panel-title {
   margin: 0;

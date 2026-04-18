@@ -266,9 +266,19 @@
     });
   }
 
+  function refreshPaperCharts() {
+    if (window.PaperMiniCharts && typeof window.PaperMiniCharts.update === "function") {
+      window.PaperMiniCharts.update(lastOrders, lastStatus, {
+        prefix: prefix,
+        hiddenMap: hiddenMap,
+        slot: slot,
+      });
+    }
+  }
+
   function syncOverviewBar() {
-    if (!lastStatus) return;
-    updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
+    if (lastStatus) updateOverview(lastStatus, computeOverrides(lastStatus, lastOrders));
+    refreshPaperCharts();
   }
 
   function renderOrders(orders) {
