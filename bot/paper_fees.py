@@ -52,3 +52,26 @@ def slot_total_fees_usdt(
         tot += closed_trade_fee_entry_exit_usdt(t, taker_rate)[2]
     tot += open_trade_entry_fee_usdt(open_trade, taker_rate)
     return round(tot, 2)
+
+
+def wallet_balance_after_replay(
+    chronological_closed_trades: Optional[list],
+    initial: float,
+    taker_rate: float,
+    open_trade: Optional[dict],
+) -> float:
+    """
+    Số dư ví sau khi áp lại toàn bộ lệnh đã đóng (cũ → mới) từ mốc `initial`,
+    cùng thứ tự paper_loop: mỗi lệnh trừ phí vào, cộng profit (profit đã trừ phí thoát).
+    Có lệnh mở: trừ thêm phí vào lệnh hiện tại → đúng `paper_balance` lúc đang giữ vị thế.
+    """
+    run = float(initial or 0)
+    for t in chronological_closed_trades or []:
+        run -= linear_taker_fee_usdt(t.get("size"), t.get("entry_price"), taker_rate)
+        try:
+            run += float(t.get("profit") or 0)
+        except (TypeError, ValueError):
+            pass
+    if open_trade:
+        run -= linear_taker_fee_usdt(open_trade.get("size"), open_trade.get("entry_price"), taker_rate)
+    return round(run, 2)

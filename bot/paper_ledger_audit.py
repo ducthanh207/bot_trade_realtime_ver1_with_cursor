@@ -127,5 +127,6 @@ def reconcile_trades(
             "Nếu paper*_initial_capital > 0: mốc replay = giá trị đó (đổi qua UI «Lưu mốc vốn») — Cap After / %PnL vốn tính lại theo mốc; balance ví sim là thực tế bot, có thể khác nếu chỉ đổi mốc hiển thị.",
             "Cột profit = PnL vị thế (đã trừ phí thoát); Excel: initial + SUM(wallet_change) với wallet_change = profit − entry_fee.",
             "Tổng phí / cột Phí: bot.paper_fees (taker × notional vào + ra), cùng công thức paper_loop, exit_engine, Telegram, state.",
+            "PNL = SUM(profit đóng); profit đã trừ phí thoát — không dùng (mốc + PNL − tổng phí) cho ví. Ví (flat): mốc − SUM(phí vào) + SUM(profit).",
         ],
     }

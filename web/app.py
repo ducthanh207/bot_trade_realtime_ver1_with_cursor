@@ -12,7 +12,11 @@ import csv
 import io
 from flask import Flask, jsonify, request, render_template, Response, redirect, url_for
 
-from bot.paper_fees import closed_trade_fee_entry_exit_usdt, linear_taker_fee_usdt
+from bot.paper_fees import (
+    closed_trade_fee_entry_exit_usdt,
+    linear_taker_fee_usdt,
+    wallet_balance_after_replay,
+)
 from bot.paper_ledger_audit import (
     infer_initial_capital as _infer_initial_capital,
     paper_ledger_meta as _paper_ledger_meta,
@@ -285,11 +289,33 @@ def api_paper_start():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _resync_slot_balance_from_initial(slot: int, new_initial: float):
+    """Đặt lại số dư ví theo mốc vốn + toàn bộ lệnh đóng + phí vào lệnh mở (nếu có)."""
+    from bot import state
+    from config import settings
+
+    taker = float(getattr(settings, "TAKER_FEE", 0.0004))
+    if int(slot) == 2:
+        trades = list(state.get_paper2_trades())
+        op = state.get_paper2_open_trade()
+        set_bal = state.set_paper2_balance
+    else:
+        trades = list(state.get_paper_trades())
+        op = state.get_paper_open_trade()
+        set_bal = state.set_paper_balance
+    new_bal = wallet_balance_after_replay(trades, new_initial, taker, op)
+    if new_bal < 0:
+        raise ValueError(
+            "Mốc vốn quá thấp: sau khi tính lại theo lịch sử, ví âm. Hãy tăng vốn mốc hoặc xóa lịch sử."
+        )
+    set_bal(new_bal)
+
+
 @app.route("/api/paper/set-initial-capital", methods=["POST"])
 def api_paper_set_initial_capital():
     """
-    Chỉ cập nhật mốc vốn USDT (paper_initial_capital). UI/CSV/chart tính lại replay từ mốc này + lịch sử.
-    Không đổi paper_balance hay profit từng lệnh.
+    Lưu paper_initial_capital và đồng bộ lại paper_balance từ mốc này + toàn bộ lệnh đóng (+ phí vào nếu đang mở).
+    Lịch sử từng lệnh (profit, giá, size) giữ nguyên; chỉ ví & mốc replay thay đổi.
     """
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -298,6 +324,7 @@ def api_paper_set_initial_capital():
             return jsonify({"ok": False, "error": "initial_capital phải > 0"}), 400
         from bot import state
         state.set_paper_initial_capital(capital)
+        _resync_slot_balance_from_initial(1, capital)
         try:
             from bot.paper_persistence import save_paper_state
             save_paper_state()
@@ -305,9 +332,12 @@ def api_paper_set_initial_capital():
             pass
         return jsonify({
             "ok": True,
-            "message": "Đã lưu mốc vốn Paper 1. Bảng / biểu đồ / CSV dùng mốc này để tính lại Cap After & %PnL vốn.",
+            "message": "Đã lưu mốc vốn Paper 1 và đồng bộ ví (balance) theo mốc + lịch sử. Cap After / %PnL / phí / PNL khớp chuỗi.",
             "paper_initial_capital": capital,
+            "paper_balance": state.get_paper_balance(),
         })
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -406,7 +436,7 @@ def api_paper2_start():
 
 @app.route("/api/paper2/set-initial-capital", methods=["POST"])
 def api_paper2_set_initial_capital():
-    """Cập nhật paper2_initial_capital; replay UI/CSV/chart theo mốc mới + lịch sử (không đổi balance thực tế)."""
+    """Lưu paper2_initial_capital và đồng bộ paper2_balance từ mốc + lịch sử (giữ từng lệnh)."""
     try:
         data = request.get_json(force=True, silent=True) or {}
         capital = float(data.get("initial_capital", 0))
@@ -414,6 +444,7 @@ def api_paper2_set_initial_capital():
             return jsonify({"ok": False, "error": "initial_capital phải > 0"}), 400
         from bot import state
         state.set_paper2_initial_capital(capital)
+        _resync_slot_balance_from_initial(2, capital)
         try:
             from bot.paper_persistence import save_paper_state
             save_paper_state()
@@ -421,9 +452,12 @@ def api_paper2_set_initial_capital():
             pass
         return jsonify({
             "ok": True,
-            "message": "Đã lưu mốc vốn Paper 2. Bảng / biểu đồ / CSV tính lại theo mốc này.",
+            "message": "Đã lưu mốc vốn Paper 2 và đồng bộ ví theo mốc + lịch sử.",
             "paper2_initial_capital": capital,
+            "paper2_balance": state.get_paper2_balance(),
         })
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

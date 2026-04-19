@@ -5,7 +5,7 @@
   <header class="overview">
     <label>Vốn (USDT)</label>
     <input type="number" id="initial_capital" value="1000" min="1" step="1">
-    <button type="button" class="btn-rules" id="btnSetInitialCapital" title="Lưu mốc vốn; bảng, biểu đồ, CSV tính lại Cap After và %PnL vốn theo mốc này (không đổi số dư ví đang chạy)">Lưu mốc vốn</button>
+    <button type="button" class="btn-rules" id="btnSetInitialCapital" title="Lưu mốc vốn và đồng bộ ví (balance) theo mốc + toàn bộ lệnh trong state (kể cả lệnh đang ẩn trên UI). Giữ profit/giá/size từng lệnh.">Lưu mốc vốn</button>
     <button class="start" id="btnStart">Kích hoạt</button>
     <button class="pause" id="btnPause">Tạm dừng</button>
     <button class="stop" id="btnStop">Dừng</button>
@@ -15,10 +15,10 @@
     <span class="stat" id="statTradesDone">Lệnh đã hoàn thành: 0</span>
     <span class="stat" id="statOrdersOpen">Lệnh_Open: 0</span>
     <span class="stat" id="statWinrate">Winrate: 0%</span>
-    <span class="stat" id="statPnl">PNL: 0.00</span>
+    <span class="stat" id="statPnl" title="Tổng profit đã đóng; mỗi profit đã trừ phí thoát. Đừng cộng trừ với Tổng phí kiểu (mốc + PNL − phí) — sẽ lệch vì phí thoát đã nằm trong PNL.">PNL: 0.00</span>
     <span class="stat" id="statPnlOpen">PNL_Open: 0.00</span>
-    <span class="stat" id="statBalance">Vốn: 0.00</span>
-    <span class="stat" id="statTotalFees">Tổng phí: 0.00</span>
+    <span class="stat" id="statBalance" title="Số dư ví (đã trừ phí vào lệnh đang mở nếu có). Capital_Open = Vốn + PNL_Open. Khi có lệnh ẩn, có thể dùng số replay trên thanh.">Vốn: 0.00</span>
+    <span class="stat" id="statTotalFees" title="Tổng phí vào + phí thoát mọi lệnh đóng + phí vào lệnh mở. Khi ẩn lệnh: chỉ tính lệnh không ẩn (đồng bộ Vốn replay).">Tổng phí: 0.00</span>
     <span class="stat" id="statCapitalOpen">Capital_Open: 0.00</span>
     <span class="refresh-msg" id="refreshMsg">Cập nhật 5s</span>
     <div class="overview-rules">
