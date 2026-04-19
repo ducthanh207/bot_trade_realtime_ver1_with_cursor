@@ -265,6 +265,10 @@
     var pctEl = document.getElementById("inputWalletPct");
     var lbEl = document.getElementById("inputPctLookback");
     var ae = document.activeElement;
+    if (capitalInput != null && ae !== capitalInput) {
+      var icV = field(d, "initial_capital");
+      if (icV != null && icV !== "") capitalInput.value = String(Number(icV));
+    }
     if (levEl != null && ae !== levEl)
       levEl.value = field(d, "leverage_display") != null ? Number(field(d, "leverage_display")) : 20;
     if (pctEl != null && ae !== pctEl)
@@ -447,6 +451,33 @@
         else alert(d.error || "Lỗi");
       });
   });
+  var btnSetInitialCapital = document.getElementById("btnSetInitialCapital");
+  if (btnSetInitialCapital) {
+    btnSetInitialCapital.addEventListener("click", function () {
+      var cap = parseFloat(capitalInput.value);
+      if (!(cap > 0)) {
+        alert("Nhập vốn > 0");
+        return;
+      }
+      fetch(apiBase + "/set-initial-capital", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initial_capital: cap }),
+      })
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (d) {
+          if (d.ok) {
+            refresh();
+            alert(d.message || "Đã lưu mốc vốn.");
+          } else alert(d.error || "Lỗi");
+        })
+        .catch(function () {
+          alert("Lỗi kết nối");
+        });
+    });
+  }
   document.getElementById("btnPause").addEventListener("click", function () {
     fetch(apiBase + "/pause", { method: "POST" })
       .then(function (r) {

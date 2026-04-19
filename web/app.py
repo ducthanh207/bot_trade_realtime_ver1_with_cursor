@@ -9,9 +9,15 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 import csv
-import hashlib
 import io
 from flask import Flask, jsonify, request, render_template, Response, redirect, url_for
+
+from bot.paper_ledger_audit import (
+    infer_initial_capital as _infer_initial_capital,
+    paper_ledger_meta as _paper_ledger_meta,
+    reconcile_trades as _reconcile_trades,
+    trade_key_closed as _trade_key_closed,
+)
 from datetime import datetime, timezone
 try:
     from config import settings as _app_settings
@@ -278,6 +284,33 @@ def api_paper_start():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/paper/set-initial-capital", methods=["POST"])
+def api_paper_set_initial_capital():
+    """
+    Chỉ cập nhật mốc vốn USDT (paper_initial_capital). UI/CSV/chart tính lại replay từ mốc này + lịch sử.
+    Không đổi paper_balance hay profit từng lệnh.
+    """
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        capital = float(data.get("initial_capital", 0))
+        if capital <= 0:
+            return jsonify({"ok": False, "error": "initial_capital phải > 0"}), 400
+        from bot import state
+        state.set_paper_initial_capital(capital)
+        try:
+            from bot.paper_persistence import save_paper_state
+            save_paper_state()
+        except Exception:
+            pass
+        return jsonify({
+            "ok": True,
+            "message": "Đã lưu mốc vốn Paper 1. Bảng / biểu đồ / CSV dùng mốc này để tính lại Cap After & %PnL vốn.",
+            "paper_initial_capital": capital,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/paper/clear-history", methods=["POST"])
 def api_paper_clear_history():
     """Xóa toàn bộ lịch sử lệnh (UI + state), reset về trạng thái ban đầu. Dữ liệu đã xuất CSV vẫn giữ ở file đã tải."""
@@ -366,6 +399,30 @@ def api_paper2_start():
         except Exception:
             pass
         return jsonify({"ok": True, "message": "Đã kích hoạt Paper trade 2 (phương pháp 2)."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/paper2/set-initial-capital", methods=["POST"])
+def api_paper2_set_initial_capital():
+    """Cập nhật paper2_initial_capital; replay UI/CSV/chart theo mốc mới + lịch sử (không đổi balance thực tế)."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        capital = float(data.get("initial_capital", 0))
+        if capital <= 0:
+            return jsonify({"ok": False, "error": "initial_capital phải > 0"}), 400
+        from bot import state
+        state.set_paper2_initial_capital(capital)
+        try:
+            from bot.paper_persistence import save_paper_state
+            save_paper_state()
+        except Exception:
+            pass
+        return jsonify({
+            "ok": True,
+            "message": "Đã lưu mốc vốn Paper 2. Bảng / biểu đồ / CSV tính lại theo mốc này.",
+            "paper2_initial_capital": capital,
+        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -808,69 +865,6 @@ def _pct_pnl_capital(profit: float, capital_before: float) -> float:
     return round((profit / capital_before * 100), 2) if capital_before and capital_before != 0 else 0.0
 
 
-def _trade_key_closed(t: dict) -> str:
-    """Khóa ổn định cho một lệnh đã đóng (ẩn/lưu UI)."""
-    parts = [
-        str(t.get("entry_time", "")),
-        str(t.get("exit_time", "")),
-        str(t.get("entry_price", "")),
-        str(t.get("exit_price", "")),
-        str(t.get("side", "")),
-        format(float(t.get("profit", 0) or 0), ".8f"),
-    ]
-    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
-
-
-def _infer_initial_capital(trades_chrono: list, state_initial: float, taker_fee: float) -> float:
-    """
-    Vốn mở đầu cho replay Cap After / %PnL vốn / CSV.
-
-    Nếu đã có ít nhất một lệnh đóng trong list: luôn suy từ lệnh *đầu tiên* theo thời gian
-    (capital_before ghi khi đóng = số dư sau phí vào lệnh đó; + phí vào = ví trước khi mở lệnh đầu).
-
-    Trước đây ưu tiên paper*_initial_capital khi > 0 — dễ lệch Paper 2 (và Paper 1) khi
-    initial trong state không khớp chuỗi thật (deploy/persistence, đổi vốn, resume).
-    """
-    if trades_chrono:
-        t0 = trades_chrono[0]
-        entry = float(t0.get("entry_price") or 0)
-        size = float(t0.get("size") or 0)
-        cb = float(t0.get("capital_before") or 0)
-        fee0 = size * entry * float(taker_fee) if size and entry else 0.0
-        inferred = cb + fee0
-        if inferred > 0:
-            return inferred
-    return float(state_initial or 0)
-
-
-def _paper_ledger_meta(trades_chrono: list, initial: float, taker_fee: float) -> list:
-    """
-    Replay sổ cái theo thứ tự thời gian (cũ → mới).
-    Mỗi lệnh: trừ phí vào, cộng profit đóng — Cap After khớp initial + Σprofit - Σphí vào.
-    %PnL vốn dùng vốn tài khoản *trước* khi trừ phí vào (đồng bộ với lúc mở lệnh trên bot).
-    """
-    run = float(initial or 0)
-    out = []
-    for idx, t in enumerate(trades_chrono):
-        entry = float(t.get("entry_price") or 0)
-        size = float(t.get("size") or 0)
-        profit = float(t.get("profit") or 0)
-        fee_in = size * entry * float(taker_fee) if size and entry else 0.0
-        cap_equity_before_open = run
-        run -= fee_in
-        run += profit
-        out.append(
-            {
-                "replay_index": idx,
-                "trade_key": _trade_key_closed(t),
-                "capital_equity_before_open": round(cap_equity_before_open, 2),
-                "capital_after_close": round(run, 2),
-                "fee_entry": round(fee_in, 8),
-            }
-        )
-    return out
-
-
 def _effective_margin(entry: float, size: float, leverage: float, stored_margin=None, capital_before=None):
     """Vốn vào lệnh (margin) = notional/leverage. Nếu stored sai (vd > capital) thì dùng margin_calc."""
     margin_calc = (entry * size) / float(leverage) if (entry and size and leverage) else None
@@ -880,6 +874,33 @@ def _effective_margin(entry: float, size: float, leverage: float, stored_margin=
     if capital_before and margin and margin > capital_before:
         margin = margin_calc
     return margin
+
+
+def _paper_entry_fee_usdt(entry_px: float, size: float, taker_fee: float) -> float:
+    if entry_px and size:
+        return float(entry_px) * float(size) * float(taker_fee)
+    return 0.0
+
+
+def _capital_after_closed_trade(t: dict, replay_cap_after) -> float | None:
+    """
+    Cap After hiển thị/CSV: ưu tiên replay theo paper*_initial_capital (đổi mốc = tính lại đồng bộ).
+    Fallback capital_after lưu trong trade nếu thiếu meta.
+    """
+    if replay_cap_after is not None:
+        try:
+            return round(float(replay_cap_after), 2)
+        except (TypeError, ValueError):
+            pass
+    raw = t.get("capital_after")
+    if raw is not None:
+        try:
+            x = float(raw)
+            if x == x:
+                return round(x, 2)
+        except (TypeError, ValueError):
+            pass
+    return None
 
 
 def _orders_json_for_slot(slot: int):
@@ -940,6 +961,8 @@ def _orders_json_for_slot(slot: int):
             "exit_time": None,
             "exit_price": None,
             "pnl": round(pnl, 2),
+            "entry_fee": None,
+            "wallet_change": None,
             "pct_pnl": pct_pnl_open,
             "pct_pnl_capital": pct_pnl_capital_open,
             "capital_after": None,
@@ -956,11 +979,12 @@ def _orders_json_for_slot(slot: int):
         lm = meta[idx] if idx < len(meta) else {}
         profit = float(t.get("profit", 0))
         cap_before_stored = float(t.get("capital_before") or 0)
-        cap_after = lm.get("capital_after_close")
-        if cap_after is not None:
-            cap_after = round(float(cap_after), 2)
+        replay_ca = lm.get("capital_after_close")
+        cap_after = _capital_after_closed_trade(t, replay_ca)
         entry_px = float(t.get("entry_price") or 0)
         size = float(t.get("size") or 0)
+        fee_in = _paper_entry_fee_usdt(entry_px, size, taker_fee)
+        wallet_change = round(profit - fee_in, 2)
         margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before_stored)
         pct_pnl = _pct_pnl(profit, margin_t) if margin_t else None
         cap_eq = float(lm.get("capital_equity_before_open") or 0)
@@ -973,6 +997,8 @@ def _orders_json_for_slot(slot: int):
             "exit_time": t.get("exit_time"),
             "exit_price": t.get("exit_price"),
             "pnl": round(profit, 2),
+            "entry_fee": round(fee_in, 6),
+            "wallet_change": wallet_change,
             "pct_pnl": pct_pnl,
             "pct_pnl_capital": pct_pnl_capital,
             "capital_after": cap_after,
@@ -1051,6 +1077,8 @@ def _orders_for_csv(slot: int = 1):
             "exit_time": "",
             "exit_price": "",
             "profit": "",
+            "entry_fee": "",
+            "wallet_change": "",
             "pct_pnl": "",
             "pct_pnl_capital": "",
             "capital_after": "",
@@ -1067,11 +1095,12 @@ def _orders_for_csv(slot: int = 1):
         lm = meta[idx] if idx < len(meta) else {}
         profit = float(t.get("profit", 0))
         cap_before = float(t.get("capital_before") or 0)
-        cap_after = lm.get("capital_after_close")
-        if cap_after is not None:
-            cap_after = round(float(cap_after), 2)
+        replay_ca = lm.get("capital_after_close")
+        cap_after = _capital_after_closed_trade(t, replay_ca)
         entry_px = float(t.get("entry_price") or 0)
         size = float(t.get("size") or 0)
+        fee_in = _paper_entry_fee_usdt(entry_px, size, taker_fee)
+        wallet_change = round(profit - fee_in, 2)
         margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before)
         pct_pnl = _pct_pnl(profit, margin_t) if margin_t else ""
         cap_eq = float(lm.get("capital_equity_before_open") or 0)
@@ -1085,6 +1114,8 @@ def _orders_for_csv(slot: int = 1):
             "exit_time": _ts(t.get("exit_time")),
             "exit_price": t.get("exit_price"),
             "profit": round(profit, 2),
+            "entry_fee": round(fee_in, 6),
+            "wallet_change": wallet_change,
             "pct_pnl": pct_pnl,
             "pct_pnl_capital": pct_pnl_capital,
             "capital_after": cap_after if cap_after is not None else "",
@@ -1099,15 +1130,56 @@ def _orders_for_csv(slot: int = 1):
     return rows, symbol
 
 
+@app.route("/api/paper/reconcile")
+def api_paper_reconcile():
+    """
+    Double-check vốn / PnL so với CSV và state.
+    slot=1: Paper trade; slot=2: Paper trade 2 (khác ví với slot=1).
+    """
+    try:
+        from config import settings
+
+        slot = int(request.args.get("slot", "1") or "1")
+        status = get_status()
+        if status.get("error"):
+            return jsonify({"error": status["error"]})
+        taker = float(getattr(settings, "TAKER_FEE", 0.0004))
+        if slot == 2:
+            trades = list(status.get("paper2_trades") or [])
+            init_cap = float(status.get("paper2_initial_capital") or 0)
+            bal = status.get("paper2_balance")
+            has_open = bool(status.get("paper2_open_trade"))
+        else:
+            trades = list(status.get("paper_trades") or [])
+            init_cap = float(status.get("paper_initial_capital") or 0)
+            bal = status.get("paper_balance")
+            has_open = bool(status.get("paper_open_trade"))
+        rep = _reconcile_trades(
+            trades,
+            init_cap,
+            taker,
+            float(bal) if bal is not None else None,
+            has_open,
+        )
+        rep["slot"] = slot
+        return jsonify(rep)
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 @app.route("/api/export/csv")
 def api_export_csv():
-    """Xuất toàn bộ list lệnh + 3 đường (RSI, EMA_RSI, WMA_RSI) lúc vào và thoát dạng CSV."""
+    """Xuất CSV: capital_after = số bot đã ghi; entry_fee + wallet_change để cộng dồn ví (≠ chỉ SUM profit)."""
     try:
         slot = int(request.args.get("slot", "1") or "1")
         rows, symbol = _orders_for_csv(slot)
         buf = io.StringIO()
         if not rows:
-            buf.write("id,symbol,side,entry_time,entry_price,exit_time,exit_price,profit,pct_pnl,pct_pnl_capital,capital_after,exit_reason,entry_rsi,entry_ema_rsi,entry_wma_rsi,exit_rsi,exit_ema_rsi,exit_wma_rsi\n")
+            buf.write(
+                "id,symbol,side,entry_time,entry_price,exit_time,exit_price,profit,entry_fee,wallet_change,"
+                "pct_pnl,pct_pnl_capital,capital_after,exit_reason,entry_rsi,entry_ema_rsi,entry_wma_rsi,"
+                "exit_rsi,exit_ema_rsi,exit_wma_rsi\n"
+            )
         else:
             cols = list(rows[0].keys())
             w = csv.DictWriter(buf, fieldnames=cols, lineterminator="\n")
