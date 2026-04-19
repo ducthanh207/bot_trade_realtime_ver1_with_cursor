@@ -130,6 +130,34 @@
     return run;
   }
 
+  /** Phí một chiều taker (USDT) — cùng công thức bot.paper_fees.linear_taker_fee_usdt */
+  function linearFeeUsdt(size, price, takerFee) {
+    var s = Number(size) || 0;
+    var p = Number(price) || 0;
+    if (s <= 0 || p <= 0 || !isFinite(takerFee) || takerFee < 0) return 0;
+    return s * p * takerFee;
+  }
+
+  function feeTotalClosedOrderUsdt(o, takerFee) {
+    return linearFeeUsdt(o.size, o.entry_price, takerFee) + linearFeeUsdt(o.size, o.exit_price, takerFee);
+  }
+
+  /** Tổng phí (lệnh đóng không ẩn + phí vào lệnh mở nếu có), đồng bộ slot_total_fees_usdt phía server */
+  function replayTotalFeesVisible(chronoClosed, hm, orders, takerFee) {
+    var tot = 0;
+    for (var i = 0; i < chronoClosed.length; i++) {
+      var o = chronoClosed[i];
+      if (hm[String(o.trade_key || "")]) continue;
+      tot += feeTotalClosedOrderUsdt(o, takerFee);
+    }
+    for (var j = 0; j < orders.length; j++) {
+      if (!orderIsOpen(orders[j])) continue;
+      tot += linearFeeUsdt(orders[j].size, orders[j].entry_price, takerFee);
+      break;
+    }
+    return Math.round(tot * 100) / 100;
+  }
+
   function computeOverrides(d, orders) {
     if (!d) return null;
     var taker = Number(d.taker_fee);
@@ -155,6 +183,7 @@
     var wr = done > 0 ? (wins / done) * 100 : 0;
     var hasOpen = orders.some(orderIsOpen);
     var synBal = replayBalanceAfterVisible(chrono, hiddenMap, initial, taker);
+    var totalFees = replayTotalFeesVisible(chrono, hiddenMap, orders, taker);
     if (hasOpen) {
       var pOpen = Number(field(d, "pnl_open")) || 0;
       var syn = Math.round(synBal * 100) / 100;
@@ -165,6 +194,7 @@
         balance: syn,
         pnl_open: pOpen,
         capital_open: Math.round((syn + pOpen) * 100) / 100,
+        total_fees: totalFees,
       };
     }
     var b = Math.round(synBal * 100) / 100;
@@ -175,6 +205,7 @@
       balance: b,
       pnl_open: 0,
       capital_open: b,
+      total_fees: totalFees,
     };
   }
 
@@ -250,6 +281,19 @@
           ? field(d, "balance")
           : 0;
     document.getElementById("statBalance").textContent = "Vốn: " + Number(bal).toFixed(2);
+
+    var feesTot =
+      overrides && overrides.total_fees != null
+        ? overrides.total_fees
+        : field(d, "total_fees");
+    var elFees = document.getElementById("statTotalFees");
+    if (elFees != null) {
+      elFees.textContent =
+        "Tổng phí: " +
+        (feesTot != null && feesTot !== "" && isFinite(Number(feesTot))
+          ? Number(feesTot).toFixed(2)
+          : "—");
+    }
 
     var capOpen =
       overrides && overrides.capital_open != null
@@ -341,6 +385,8 @@
         var pctPnlCapital =
           pctCapVal != null ? (pctCapVal >= 0 ? "+" : "") + pctCapVal.toFixed(2) + "%" : "—";
         var capAfter = o.capital_after != null ? Number(o.capital_after).toFixed(2) : "—";
+        var feeStr =
+          o.fee != null && o.fee !== "" && isFinite(Number(o.fee)) ? Number(o.fee).toFixed(4) : "—";
         var id = orderIsOpen(o) ? "•" : o.id != null ? o.id : idx + 1;
         var rowDataId = orderRowDataId(o, idx);
         var actionCell = orderIsOpen(o)
@@ -377,6 +423,8 @@
           pnlClass +
           '">' +
           pnlStr +
+          "</td><td>" +
+          feeStr +
           '</td><td class="' +
           pnlClass +
           '">' +

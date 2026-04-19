@@ -13,6 +13,7 @@ from config import settings as _settings
 _tz_app = getattr(_settings, "GMT7", timezone.utc)
 
 from config import settings
+from bot.paper_fees import linear_taker_fee_usdt
 from exchange.binance_client import BinanceClient
 from strategy import (
     add_indicators,
@@ -285,7 +286,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         size, margin, notional = size_and_margin(balance, entry_px, leverage=lev, wallet_pct=wct)
                         if size <= 0 or margin > balance:
                             continue
-                        fee_in = size * entry_px * settings.TAKER_FEE
+                        fee_in = linear_taker_fee_usdt(size, entry_px, float(settings.TAKER_FEE))
                         balance_after_fee = balance - fee_in
                         atr_now = atr_1h_at_entry(df_1h, float(row_closed["ATR"]))
                         trail_dist = atr_now * settings.ATR_MULTIPLIER

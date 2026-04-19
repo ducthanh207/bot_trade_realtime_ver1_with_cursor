@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from config import settings as _cfg
 _tz_app = getattr(_cfg, "GMT7", timezone.utc)
 from config import settings
+from bot.paper_fees import linear_taker_fee_usdt
 
 # Trạng thái chờ nhập % vốn (chat_id -> { "waiting": "pct", "side": "LONG"|"SHORT" })
 _pending = {}
@@ -291,7 +292,7 @@ def _do_paper_entry(chat_id: str, side: str, pct: float) -> str:
         size, margin, notional = size_and_margin(balance, entry_px, leverage=lev, wallet_pct=wallet_pct)
         if size <= 0 or margin > balance:
             return "Không đủ margin hoặc size = 0."
-        fee_in = size * entry_px * settings.TAKER_FEE
+        fee_in = linear_taker_fee_usdt(size, entry_px, float(settings.TAKER_FEE))
         balance_after = balance - fee_in
         trail_dist = atr_now * settings.ATR_MULTIPLIER
         init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
@@ -352,7 +353,7 @@ def _do_paper_close(chat_id: str) -> str:
         pnl = (exit_px - entry) * size
     else:
         pnl = (entry - exit_px) * size
-    fee_out = size * exit_px * settings.TAKER_FEE
+    fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
     pnl_net = pnl - fee_out
     capital_after = balance + pnl_net
     # 3 đường lúc thoát (lấy từ nến 4h gần nhất nếu có)

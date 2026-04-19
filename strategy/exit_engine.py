@@ -14,6 +14,7 @@ from typing import Any, List, Optional, Tuple
 import pandas as pd
 
 from config import settings
+from bot.paper_fees import linear_taker_fee_usdt
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 from strategy.signals import long_exit, long_exit_early, short_exit, short_exit_early
 from strategy.strategies.registry import METHOD_1, METHOD_2
@@ -130,7 +131,7 @@ def compute_exit_candidates(
                 pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
                 if px_lim is not None:
                     exit_px = px_lim
-                fee_out = size * exit_px * settings.TAKER_FEE
+                fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
                 candidates.append((t_1m, pnl_lim - fee_out, exit_px, "ATR_TRAIL"))
                 break
 
@@ -154,7 +155,7 @@ def compute_exit_candidates(
         if take:
             pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
             exit_px = px_lim if px_lim is not None else exit_px_ref
-            fee_out = size * exit_px * settings.TAKER_FEE
+            fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EXIT"))
 
     if apply_4h_layer and allow_early_exit and sig_early:
@@ -165,7 +166,7 @@ def compute_exit_candidates(
         if take:
             pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
             exit_px = px_lim if px_lim is not None else exit_px_ref
-            fee_out = size * exit_px * settings.TAKER_FEE
+            fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT"))
 
     # ---------- Phương pháp 2: TP theo %change ----------
@@ -185,7 +186,7 @@ def compute_exit_candidates(
             pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw2, max_loss)
             if px_lim is not None:
                 exit_px = px_lim
-            fee_out = size * exit_px * settings.TAKER_FEE
+            fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "PCT_CHANGE_TP"))
 
     return candidates

@@ -12,6 +12,7 @@ import csv
 import io
 from flask import Flask, jsonify, request, render_template, Response, redirect, url_for
 
+from bot.paper_fees import closed_trade_fee_entry_exit_usdt, linear_taker_fee_usdt
 from bot.paper_ledger_audit import (
     infer_initial_capital as _infer_initial_capital,
     paper_ledger_meta as _paper_ledger_meta,
@@ -633,7 +634,7 @@ def _close_paper_slot(slot: int):
         pnl = (exit_px - entry) * size
     else:
         pnl = (entry - exit_px) * size
-    fee_out = size * exit_px * getattr(settings, "TAKER_FEE", 0.0004)
+    fee_out = linear_taker_fee_usdt(size, exit_px, float(getattr(settings, "TAKER_FEE", 0.0004)))
     pnl_net = pnl - fee_out
     capital_after = balance + pnl_net
     exit_rsi = exit_ema_rsi = exit_wma_rsi = None
@@ -876,12 +877,6 @@ def _effective_margin(entry: float, size: float, leverage: float, stored_margin=
     return margin
 
 
-def _paper_entry_fee_usdt(entry_px: float, size: float, taker_fee: float) -> float:
-    if entry_px and size:
-        return float(entry_px) * float(size) * float(taker_fee)
-    return 0.0
-
-
 def _capital_after_closed_trade(t: dict, replay_cap_after) -> float | None:
     """
     Cap After hiển thị/CSV: ưu tiên replay theo paper*_initial_capital (đổi mốc = tính lại đồng bộ).
@@ -953,6 +948,7 @@ def _orders_json_for_slot(slot: int):
             pnl = 0.0
         pct_pnl_open = _pct_pnl(pnl, margin_open) if margin_open else 0.0
         pct_pnl_capital_open = _pct_pnl_capital(pnl, cap_before_open)
+        fee_open_in = linear_taker_fee_usdt(size, entry, taker_fee)
         orders.append({
             "id": "open",
             "side": side,
@@ -961,7 +957,9 @@ def _orders_json_for_slot(slot: int):
             "exit_time": None,
             "exit_price": None,
             "pnl": round(pnl, 2),
-            "entry_fee": None,
+            "entry_fee": round(fee_open_in, 6),
+            "fee_exit": None,
+            "fee": round(fee_open_in, 4),
             "wallet_change": None,
             "pct_pnl": pct_pnl_open,
             "pct_pnl_capital": pct_pnl_capital_open,
@@ -983,7 +981,8 @@ def _orders_json_for_slot(slot: int):
         cap_after = _capital_after_closed_trade(t, replay_ca)
         entry_px = float(t.get("entry_price") or 0)
         size = float(t.get("size") or 0)
-        fee_in = _paper_entry_fee_usdt(entry_px, size, taker_fee)
+        fee_in = linear_taker_fee_usdt(size, entry_px, taker_fee)
+        fe_entry, fe_exit, fee_sum = closed_trade_fee_entry_exit_usdt(t, taker_fee)
         wallet_change = round(profit - fee_in, 2)
         margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before_stored)
         pct_pnl = _pct_pnl(profit, margin_t) if margin_t else None
@@ -997,7 +996,9 @@ def _orders_json_for_slot(slot: int):
             "exit_time": t.get("exit_time"),
             "exit_price": t.get("exit_price"),
             "pnl": round(profit, 2),
-            "entry_fee": round(fee_in, 6),
+            "entry_fee": round(fe_entry, 6),
+            "fee_exit": round(fe_exit, 6),
+            "fee": round(fee_sum, 4),
             "wallet_change": wallet_change,
             "pct_pnl": pct_pnl,
             "pct_pnl_capital": pct_pnl_capital,
@@ -1068,6 +1069,8 @@ def _orders_for_csv(slot: int = 1):
     if open_trade:
         entry = float(open_trade.get("entry_price") or 0)
         side = str(open_trade.get("side", "")).upper()
+        size_o = float(open_trade.get("size") or 0)
+        fee_o_in = linear_taker_fee_usdt(size_o, entry, taker_fee)
         rows.append({
             "id": "open",
             "symbol": symbol,
@@ -1077,7 +1080,9 @@ def _orders_for_csv(slot: int = 1):
             "exit_time": "",
             "exit_price": "",
             "profit": "",
-            "entry_fee": "",
+            "entry_fee": round(fee_o_in, 6) if fee_o_in else "",
+            "fee_exit": "",
+            "fee": round(fee_o_in, 4) if fee_o_in else "",
             "wallet_change": "",
             "pct_pnl": "",
             "pct_pnl_capital": "",
@@ -1099,7 +1104,8 @@ def _orders_for_csv(slot: int = 1):
         cap_after = _capital_after_closed_trade(t, replay_ca)
         entry_px = float(t.get("entry_price") or 0)
         size = float(t.get("size") or 0)
-        fee_in = _paper_entry_fee_usdt(entry_px, size, taker_fee)
+        fee_in = linear_taker_fee_usdt(size, entry_px, taker_fee)
+        fe_x, fe_out, fee_tot = closed_trade_fee_entry_exit_usdt(t, taker_fee)
         wallet_change = round(profit - fee_in, 2)
         margin_t = _effective_margin(entry_px, size, leverage, t.get("margin"), cap_before)
         pct_pnl = _pct_pnl(profit, margin_t) if margin_t else ""
@@ -1114,7 +1120,9 @@ def _orders_for_csv(slot: int = 1):
             "exit_time": _ts(t.get("exit_time")),
             "exit_price": t.get("exit_price"),
             "profit": round(profit, 2),
-            "entry_fee": round(fee_in, 6),
+            "entry_fee": round(fe_x, 6),
+            "fee_exit": round(fe_out, 6),
+            "fee": round(fee_tot, 4),
             "wallet_change": wallet_change,
             "pct_pnl": pct_pnl,
             "pct_pnl_capital": pct_pnl_capital,
@@ -1176,9 +1184,9 @@ def api_export_csv():
         buf = io.StringIO()
         if not rows:
             buf.write(
-                "id,symbol,side,entry_time,entry_price,exit_time,exit_price,profit,entry_fee,wallet_change,"
-                "pct_pnl,pct_pnl_capital,capital_after,exit_reason,entry_rsi,entry_ema_rsi,entry_wma_rsi,"
-                "exit_rsi,exit_ema_rsi,exit_wma_rsi\n"
+                "id,symbol,side,entry_time,entry_price,exit_time,exit_price,profit,entry_fee,fee_exit,fee,"
+                "wallet_change,pct_pnl,pct_pnl_capital,capital_after,exit_reason,entry_rsi,entry_ema_rsi,"
+                "entry_wma_rsi,exit_rsi,exit_ema_rsi,exit_wma_rsi\n"
             )
         else:
             cols = list(rows[0].keys())

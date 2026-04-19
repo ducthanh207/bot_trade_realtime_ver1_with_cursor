@@ -395,6 +395,17 @@ def to_status_dict():
     winrate2 = (wins2 / n2 * 100.0) if n2 else 0.0
     paper2_started = get_paper2_started_at()
 
+    try:
+        from config import settings as _fee_cfg
+        from bot.paper_fees import slot_total_fees_usdt
+
+        _tf = float(getattr(_fee_cfg, "TAKER_FEE", 0.0004))
+        _paper_total_fees = slot_total_fees_usdt(paper_trades, get_paper_open_trade(), _tf)
+        _paper2_total_fees = slot_total_fees_usdt(paper2_trades, get_paper2_open_trade(), _tf)
+    except Exception:
+        _paper_total_fees = 0.0
+        _paper2_total_fees = 0.0
+
     return {
         "balance": get_balance(),
         "position": pos,
@@ -413,6 +424,7 @@ def to_status_dict():
         "paper_trades_count": n,
         "paper_winrate": round(winrate, 2),
         "paper_total_pnl": round(total_pnl, 2),
+        "paper_total_fees": _paper_total_fees,
         "paper_long_count": long_ct,
         "paper_short_count": short_ct,
         "paper_leverage": _paper_leverage,
@@ -428,6 +440,7 @@ def to_status_dict():
         "paper2_trades_count": n2,
         "paper2_winrate": round(winrate2, 2),
         "paper2_total_pnl": round(total_pnl2, 2),
+        "paper2_total_fees": _paper2_total_fees,
         "paper2_long_count": long_ct2,
         "paper2_short_count": short_ct2,
         "paper2_leverage": _paper2_leverage,

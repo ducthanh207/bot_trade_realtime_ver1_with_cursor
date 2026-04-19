@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from .paper_fees import linear_taker_fee_usdt
+
 
 def trade_key_closed(t: dict) -> str:
     parts = [
@@ -35,10 +37,8 @@ def infer_initial_capital(trades_chrono: list, state_initial: float, taker_fee: 
         return ini
     if trades_chrono:
         t0 = trades_chrono[0]
-        entry = float(t0.get("entry_price") or 0)
-        size = float(t0.get("size") or 0)
         cb = float(t0.get("capital_before") or 0)
-        fee0 = size * entry * float(taker_fee) if size and entry else 0.0
+        fee0 = linear_taker_fee_usdt(t0.get("size"), t0.get("entry_price"), taker_fee)
         inferred = cb + fee0
         if inferred > 0:
             return inferred
@@ -49,10 +49,8 @@ def paper_ledger_meta(trades_chrono: list, initial: float, taker_fee: float) -> 
     run = float(initial or 0)
     out = []
     for idx, t in enumerate(trades_chrono):
-        entry = float(t.get("entry_price") or 0)
-        size = float(t.get("size") or 0)
         profit = float(t.get("profit") or 0)
-        fee_in = size * entry * float(taker_fee) if size and entry else 0.0
+        fee_in = linear_taker_fee_usdt(t.get("size"), t.get("entry_price"), taker_fee)
         cap_equity_before_open = run
         run -= fee_in
         run += profit
@@ -66,12 +64,6 @@ def paper_ledger_meta(trades_chrono: list, initial: float, taker_fee: float) -> 
             }
         )
     return out
-
-
-def _entry_fee(t: dict, taker_fee: float) -> float:
-    entry = float(t.get("entry_price") or 0)
-    size = float(t.get("size") or 0)
-    return size * entry * float(taker_fee) if size and entry else 0.0
 
 
 def reconcile_trades(
@@ -88,7 +80,12 @@ def reconcile_trades(
     initial = infer_initial_capital(trades_chrono, state_initial, taker_fee)
     meta = paper_ledger_meta(trades_chrono, initial, taker_fee)
     sum_profit = sum(float(t.get("profit") or 0) for t in trades_chrono)
-    sum_fee_in = sum(_entry_fee(t, taker_fee) for t in trades_chrono)
+    sum_fee_in = sum(
+        linear_taker_fee_usdt(t.get("size"), t.get("entry_price"), taker_fee) for t in trades_chrono
+    )
+    sum_fee_out = sum(
+        linear_taker_fee_usdt(t.get("size"), t.get("exit_price"), taker_fee) for t in trades_chrono
+    )
     replay_end = float(meta[-1]["capital_after_close"]) if meta else float(initial)
 
     formula = initial - sum_fee_in + sum_profit
@@ -112,6 +109,8 @@ def reconcile_trades(
         "replay_initial_capital": round(float(initial), 4),
         "sum_profit_closed": round(sum_profit, 8),
         "sum_entry_fees": round(sum_fee_in, 8),
+        "sum_exit_fees": round(sum_fee_out, 8),
+        "sum_roundtrip_fees_closed": round(sum_fee_in + sum_fee_out, 8),
         "replay_final_after_last_close": round(replay_end, 4),
         "identity_replay_equals_initial_minus_fees_plus_profit": formula_ok,
         "identity_detail": round(formula, 4),
@@ -127,5 +126,6 @@ def reconcile_trades(
             "Paper (slot=1) và Paper 2 (slot=2) là hai ví riêng — đừng so CSV slot 1 với số hiển thị Paper 2.",
             "Nếu paper*_initial_capital > 0: mốc replay = giá trị đó (đổi qua UI «Lưu mốc vốn») — Cap After / %PnL vốn tính lại theo mốc; balance ví sim là thực tế bot, có thể khác nếu chỉ đổi mốc hiển thị.",
             "Cột profit = PnL vị thế (đã trừ phí thoát); Excel: initial + SUM(wallet_change) với wallet_change = profit − entry_fee.",
+            "Tổng phí / cột Phí: bot.paper_fees (taker × notional vào + ra), cùng công thức paper_loop, exit_engine, Telegram, state.",
         ],
     }
