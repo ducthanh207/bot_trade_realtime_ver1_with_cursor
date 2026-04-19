@@ -822,16 +822,25 @@ def _trade_key_closed(t: dict) -> str:
 
 
 def _infer_initial_capital(trades_chrono: list, state_initial: float, taker_fee: float) -> float:
-    """Vốn ban đầu: từ state, hoặc suy ra từ lệnh đầu nếu state = 0."""
-    ini = float(state_initial or 0)
-    if ini > 0 or not trades_chrono:
-        return ini
-    t0 = trades_chrono[0]
-    entry = float(t0.get("entry_price") or 0)
-    size = float(t0.get("size") or 0)
-    cb = float(t0.get("capital_before") or 0)
-    fee0 = size * entry * float(taker_fee) if size and entry else 0.0
-    return cb + fee0
+    """
+    Vốn mở đầu cho replay Cap After / %PnL vốn / CSV.
+
+    Nếu đã có ít nhất một lệnh đóng trong list: luôn suy từ lệnh *đầu tiên* theo thời gian
+    (capital_before ghi khi đóng = số dư sau phí vào lệnh đó; + phí vào = ví trước khi mở lệnh đầu).
+
+    Trước đây ưu tiên paper*_initial_capital khi > 0 — dễ lệch Paper 2 (và Paper 1) khi
+    initial trong state không khớp chuỗi thật (deploy/persistence, đổi vốn, resume).
+    """
+    if trades_chrono:
+        t0 = trades_chrono[0]
+        entry = float(t0.get("entry_price") or 0)
+        size = float(t0.get("size") or 0)
+        cb = float(t0.get("capital_before") or 0)
+        fee0 = size * entry * float(taker_fee) if size and entry else 0.0
+        inferred = cb + fee0
+        if inferred > 0:
+            return inferred
+    return float(state_initial or 0)
 
 
 def _paper_ledger_meta(trades_chrono: list, initial: float, taker_fee: float) -> list:

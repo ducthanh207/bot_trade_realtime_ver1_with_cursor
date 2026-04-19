@@ -58,6 +58,40 @@
     return !!o && (o.is_open === true || o.is_open === 1);
   }
 
+  function orderRowDataId(o, idx) {
+    if (orderIsOpen(o)) return "open";
+    return String(o.id != null ? o.id : idx + 1);
+  }
+
+  function clearOrderRowHighlight() {
+    ordersBody.querySelectorAll("tr.order-row-highlight").forEach(function (tr) {
+      tr.classList.remove("order-row-highlight");
+    });
+    if (window.PaperMiniCharts && typeof window.PaperMiniCharts.clearHighlight === "function") {
+      window.PaperMiniCharts.clearHighlight();
+    }
+  }
+
+  function focusOrderRowById(rowId) {
+    var rid = String(rowId);
+    clearOrderRowHighlight();
+    var row = null;
+    ordersBody.querySelectorAll("tr[data-order-id]").forEach(function (tr) {
+      if (tr.getAttribute("data-order-id") === rid) row = tr;
+    });
+    if (!row) return;
+    row.classList.add("order-row-highlight");
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (window.PaperMiniCharts && typeof window.PaperMiniCharts.setHighlightRowId === "function") {
+      window.PaperMiniCharts.setHighlightRowId(rid);
+    }
+  }
+
+  window.PaperOrderNav = {
+    clear: clearOrderRowHighlight,
+    focusByRowId: focusOrderRowById,
+  };
+
   function chronosClosed(orders) {
     var closed = orders.filter(function (o) {
       return !orderIsOpen(o);
@@ -272,6 +306,11 @@
         prefix: prefix,
         hiddenMap: hiddenMap,
         slot: slot,
+        onOrderSelect: function (id) {
+          if (window.PaperOrderNav && typeof window.PaperOrderNav.focusByRowId === "function") {
+            window.PaperOrderNav.focusByRowId(id);
+          }
+        },
       });
     }
   }
@@ -299,6 +338,7 @@
           pctCapVal != null ? (pctCapVal >= 0 ? "+" : "") + pctCapVal.toFixed(2) + "%" : "—";
         var capAfter = o.capital_after != null ? Number(o.capital_after).toFixed(2) : "—";
         var id = orderIsOpen(o) ? "•" : o.id != null ? o.id : idx + 1;
+        var rowDataId = orderRowDataId(o, idx);
         var actionCell = orderIsOpen(o)
           ? '<td><button type="button" class="btn-close-order" data-open="1">Chốt lệnh</button></td>'
           : "<td></td>";
@@ -312,6 +352,8 @@
         return (
           '<tr class="' +
           rowClass +
+          '" data-order-id="' +
+          String(rowDataId).replace(/"/g, "&quot;") +
           '"><td>' +
           id +
           "</td><td>" +
@@ -443,6 +485,7 @@
       .then(function (d) {
         if (d.ok) {
           clearHiddenStorage();
+          clearOrderRowHighlight();
           refresh();
           alert(d.message || "Đã xóa toàn bộ lịch sử lệnh.");
         } else alert(d.error || "Lỗi");
@@ -540,6 +583,17 @@
       })
       .catch(function () {});
   }
+
+  document.addEventListener(
+    "mousedown",
+    function (ev) {
+      if (ev.target.closest && ev.target.closest(".paper-charts-row")) return;
+      if (window.PaperOrderNav && typeof window.PaperOrderNav.clear === "function") {
+        window.PaperOrderNav.clear();
+      }
+    },
+    true
+  );
 
   ordersBody.addEventListener("click", function (ev) {
     var tgt = ev.target;

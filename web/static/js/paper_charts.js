@@ -1,6 +1,6 @@
 /**
- * Hai biểu đồ nhỏ trên trang Paper / Paper 2: vốn theo thời gian (line), profit từng lệnh (cột).
- * Gọi PaperMiniCharts.update(orders, status, { prefix, hiddenMap }) sau mỗi lần có dữ liệu mới.
+ * Hai chart Paper / Paper 2: line vốn, cột profit.
+ * Hover chart 1: đường dọc + nhãn ID. Click chart 1/2: gọi onOrderSelect(id).
  */
 (function () {
   var CSS_H = 150;
@@ -11,6 +11,7 @@
   var BAR_W = 12;
   var BAR_GAP = 6;
   var MIN_LINE_W_PER_PT = 8;
+  var SNAP_PX = 36;
 
   function orderIsOpen(o) {
     return !!o && (o.is_open === true || o.is_open === 1);
@@ -60,9 +61,10 @@
     return ctx;
   }
 
-  function drawLineChart(canvas, wrap, pts) {
+  function drawLineChart(canvas, wrap, pts, hoverIx) {
     var cssW = Math.max(wrap.clientWidth || 200, 200);
     var cssH = CSS_H;
+    hoverIx = hoverIx == null ? -1 : hoverIx;
     if (!pts.length) {
       var ctx0 = setupCtx(canvas, cssW, cssH);
       ctx0.fillStyle = "#2a2e39";
@@ -71,6 +73,7 @@
       ctx0.font = "12px Segoe UI,sans-serif";
       ctx0.fillText("Chưa có dữ liệu", PAD_L, cssH / 2);
       canvas.style.minWidth = cssW + "px";
+      canvas._paperLineMeta = null;
       return;
     }
     var contentW = Math.max(cssW, pts.length * MIN_LINE_W_PER_PT + PAD_L + PAD_R);
@@ -101,6 +104,16 @@
     }
     function yScale(v) {
       return PAD_T + (1 - (v - ymin) / (ymax - ymin)) * (h - PAD_T - PAD_B);
+    }
+
+    var screenPts = [];
+    for (var pi = 0; pi < pts.length; pi++) {
+      screenPts.push({
+        sx: xScale(pts[pi].t),
+        sy: yScale(pts[pi].y),
+        rowId: pts[pi].rowId,
+        label: pts[pi].label,
+      });
     }
 
     ctx.fillStyle = "#131722";
@@ -140,6 +153,35 @@
       ctx.fill();
     }
 
+    if (hoverIx >= 0 && hoverIx < screenPts.length) {
+      var hp = screenPts[hoverIx];
+      var sx = hp.sx;
+      if (sx >= PAD_L && sx <= w - PAD_R) {
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(sx, PAD_T);
+        ctx.lineTo(sx, h - PAD_B);
+        ctx.stroke();
+        var txt =
+          hp.rowId == null
+            ? "Bắt đầu"
+            : hp.rowId === "open"
+              ? "ID: Mở"
+              : "ID: " + hp.rowId;
+        ctx.font = "bold 11px Segoe UI,sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        var tw = ctx.measureText(txt).width;
+        var bx = Math.min(Math.max(sx - tw / 2 - 4, 2), w - tw - 10);
+        var by = PAD_T + 2;
+        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        ctx.fillRect(bx, by, tw + 8, 18);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(txt, bx + 4 + tw / 2, by + 14);
+      }
+    }
+
     ctx.fillStyle = "#787b86";
     ctx.font = "10px Segoe UI,sans-serif";
     ctx.textAlign = "center";
@@ -162,9 +204,17 @@
     ctx.fillText(t1, w - PAD_R - 40, h - PAD_B + 2);
 
     canvas.style.minWidth = contentW + "px";
+    canvas._paperLineMeta = {
+      screenPts: screenPts,
+      pts: pts,
+      w: w,
+      h: h,
+      wrap: wrap,
+      canvas: canvas,
+    };
   }
 
-  function drawBarChart(canvas, wrap, bars) {
+  function drawBarChart(canvas, wrap, bars, highlightRowId) {
     var cssW = Math.max(wrap.clientWidth || 200, 200);
     var cssH = CSS_H;
     if (!bars.length) {
@@ -175,6 +225,7 @@
       ctxE.font = "12px Segoe UI,sans-serif";
       ctxE.fillText("Chưa có lệnh đóng", PAD_L, cssH / 2);
       canvas.style.minWidth = cssW + "px";
+      canvas._paperBarMeta = null;
       return;
     }
     var n = bars.length;
@@ -206,6 +257,7 @@
     ctx.lineTo(w - PAD_R, zeroY);
     ctx.stroke();
 
+    var barRects = [];
     for (var i = 0; i < n; i++) {
       var p = bars[i].p;
       var x = PAD_L + BAR_GAP + i * slot;
@@ -214,8 +266,17 @@
       var y1 = Math.min(yTop, yBot);
       var y2 = Math.max(yTop, yBot);
       var bh = Math.max(y2 - y1, 1);
-      ctx.fillStyle = p >= 0 ? "rgba(38,166,154,0.85)" : "rgba(239,83,80,0.85)";
+      var hl =
+        highlightRowId != null && String(bars[i].rowId) === String(highlightRowId);
+      ctx.fillStyle = hl
+        ? p >= 0
+          ? "rgba(100,200,180,1)"
+          : "rgba(255,120,120,1)"
+        : p >= 0
+          ? "rgba(38,166,154,0.85)"
+          : "rgba(239,83,80,0.85)";
       ctx.fillRect(x, y1, BAR_W, bh);
+      barRects.push({ x0: x, x1: x + BAR_W, y0: PAD_T, y1: h - PAD_B, rowId: bars[i].rowId });
     }
 
     ctx.fillStyle = "#787b86";
@@ -240,6 +301,12 @@
     }
 
     canvas.style.minWidth = contentW + "px";
+    canvas._paperBarMeta = { barRects: barRects, bars: bars, wrap: wrap, canvas: canvas };
+  }
+
+  function closedRowId(o, idx) {
+    if (o.id != null) return String(o.id);
+    return String((o.replay_index != null ? Number(o.replay_index) : idx) + 1);
   }
 
   function buildCapitalPoints(orders, st, prefix, hiddenMap) {
@@ -251,14 +318,19 @@
     if (!isFinite(initial) || initial <= 0) initial = Number(ic) || 0;
     var tStart = parseTimeMs(sk(st, prefix, "started_at"));
     if (tStart == null) tStart = Date.now();
-    pts.push({ t: tStart, y: initial });
+    pts.push({ t: tStart, y: initial, rowId: null, label: "Bắt đầu" });
     for (var i = 0; i < closed.length; i++) {
       var o = closed[i];
       var t = parseTimeMs(o.exit_time);
       if (t == null) t = parseTimeMs(o.entry_time) || tStart + i + 1;
       var y = o.capital_after != null ? Number(o.capital_after) : null;
       if (y == null || !isFinite(y)) continue;
-      pts.push({ t: t, y: y });
+      pts.push({
+        t: t,
+        y: y,
+        rowId: closedRowId(o, i),
+        label: "",
+      });
     }
     var openRow = null;
     for (var j = 0; j < orders.length; j++) {
@@ -269,7 +341,8 @@
     }
     if (openRow) {
       var bal = Number(sk(st, prefix, "balance"));
-      if (isFinite(bal)) pts.push({ t: Date.now(), y: bal });
+      if (isFinite(bal))
+        pts.push({ t: Date.now(), y: bal, rowId: "open", label: "Mở" });
     }
     pts.sort(function (a, b) {
       return a.t - b.t;
@@ -281,7 +354,10 @@
     var closed = chronologicalVisibleClosed(orders, hiddenMap);
     var out = [];
     for (var i = 0; i < closed.length; i++) {
-      out.push({ p: Number(closed[i].pnl) || 0 });
+      out.push({
+        p: Number(closed[i].pnl) || 0,
+        rowId: closedRowId(closed[i], i),
+      });
     }
     return out;
   }
@@ -301,12 +377,127 @@
     );
   }
 
+  function nearestLinePointIndex(mx, meta) {
+    if (!meta || !meta.screenPts || !meta.screenPts.length) return -1;
+    var best = -1;
+    var bestD = SNAP_PX + 1;
+    for (var i = 0; i < meta.screenPts.length; i++) {
+      var d = Math.abs(meta.screenPts[i].sx - mx);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return bestD <= SNAP_PX ? best : -1;
+  }
+
+  function barHitRowId(offsetX, offsetY, meta) {
+    if (!meta || !meta.barRects) return null;
+    for (var i = 0; i < meta.barRects.length; i++) {
+      var r = meta.barRects[i];
+      if (
+        offsetX >= r.x0 &&
+        offsetX <= r.x1 &&
+        offsetY >= r.y0 &&
+        offsetY <= r.y1
+      ) {
+        return r.rowId;
+      }
+    }
+    return null;
+  }
+
+  var _lineHoverIx = -1;
+  var _lineRaf = null;
+  var _lastLineRedraw = null;
+  var _lastBarRedraw = null;
+  var _highlightRowId = null;
+
+  function scheduleLineRedraw() {
+    if (_lineRaf) return;
+    _lineRaf = requestAnimationFrame(function () {
+      _lineRaf = null;
+      if (typeof _lastLineRedraw === "function") _lastLineRedraw(_lineHoverIx);
+    });
+  }
+
+  function bindLineInteractions(canvas, wrap, pts) {
+    if (canvas.dataset.lineInteractionsBound) return;
+    canvas.dataset.lineInteractionsBound = "1";
+    canvas.addEventListener("mousemove", function (ev) {
+      var meta = canvas._paperLineMeta;
+      if (!meta) return;
+      var mx = ev.offsetX != null ? ev.offsetX : 0;
+      var ix = nearestLinePointIndex(mx, meta);
+      if (ix !== _lineHoverIx) {
+        _lineHoverIx = ix;
+        scheduleLineRedraw();
+      }
+    });
+    canvas.addEventListener("mouseleave", function () {
+      if (_lineHoverIx !== -1) {
+        _lineHoverIx = -1;
+        scheduleLineRedraw();
+      }
+    });
+    canvas.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      var meta = canvas._paperLineMeta;
+      if (!meta) return;
+      var mx = ev.offsetX != null ? ev.offsetX : 0;
+      var ix = nearestLinePointIndex(mx, meta);
+      if (ix < 0 || !meta.pts[ix]) return;
+      var rid = meta.pts[ix].rowId;
+      if (rid == null) return;
+      if (window.PaperMiniCharts._onOrderSelect)
+        window.PaperMiniCharts._onOrderSelect(String(rid));
+    });
+  }
+
+  function bindBarInteractions(canvas) {
+    if (canvas.dataset.barInteractionsBound) return;
+    canvas.dataset.barInteractionsBound = "1";
+    canvas.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      var meta = canvas._paperBarMeta;
+      if (!meta) return;
+      var ox = ev.offsetX != null ? ev.offsetX : 0;
+      var oy = ev.offsetY != null ? ev.offsetY : 0;
+      var rid = barHitRowId(ox, oy, meta);
+      if (rid == null) return;
+      if (window.PaperMiniCharts._onOrderSelect)
+        window.PaperMiniCharts._onOrderSelect(String(rid));
+    });
+  }
+
   window.PaperMiniCharts = {
     _lastUpdate: null,
+    _onOrderSelect: null,
+    setOrderSelectHandler: function (fn) {
+      this._onOrderSelect = typeof fn === "function" ? fn : null;
+    },
+    setHighlightRowId: function (id) {
+      _highlightRowId = id == null ? null : String(id);
+      if (typeof _lastBarRedraw === "function") {
+        try {
+          _lastBarRedraw();
+        } catch (e) {}
+      }
+    },
+    clearHighlight: function () {
+      _highlightRowId = null;
+      if (typeof _lastBarRedraw === "function") {
+        try {
+          _lastBarRedraw();
+        } catch (e) {}
+      }
+    },
     update: function (orders, st, opts) {
       opts = opts || {};
       var prefix = opts.prefix || "paper";
       var hiddenMap = opts.hiddenMap || {};
+      if (typeof opts.onOrderSelect === "function")
+        window.PaperMiniCharts._onOrderSelect = opts.onOrderSelect;
       window.PaperMiniCharts._lastUpdate = [orders || [], st, opts];
       var capCanvas = document.getElementById("paperChartCapital");
       var barCanvas = document.getElementById("paperChartProfit");
@@ -319,8 +510,22 @@
 
       var linePts = buildCapitalPoints(orders || [], st, prefix, hiddenMap);
       var bars = buildProfitBars(orders || [], hiddenMap);
-      drawLineChart(capCanvas, capWrap, linePts);
-      drawBarChart(barCanvas, barWrap, bars);
+
+      _lastLineRedraw = function (hoverIx) {
+        drawLineChart(capCanvas, capWrap, linePts, hoverIx);
+        bindLineInteractions(capCanvas, capWrap, linePts);
+      };
+      _lastBarRedraw = function () {
+        drawBarChart(barCanvas, barWrap, bars, _highlightRowId);
+        bindBarInteractions(barCanvas);
+      };
+
+      _lineHoverIx = -1;
+      _lastLineRedraw(-1);
+      _lastBarRedraw();
+
+      bindLineInteractions(capCanvas, capWrap, linePts);
+      bindBarInteractions(barCanvas);
     },
   };
 
@@ -335,4 +540,3 @@
     }, 120);
   });
 })();
-
