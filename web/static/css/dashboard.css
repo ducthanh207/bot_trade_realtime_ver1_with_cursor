@@ -477,6 +477,70 @@ body {
 }
 #chartIndicatorTv { flex: 1; min-height: 100px; }
 
+/* ===== MOBILE RESPONSIVE ===== */
+@media (max-width: 768px) {
+  /* Cho phép trang scroll tự nhiên thay vì bị kẹt trong 100vh */
+  .layout-root {
+    height: auto;
+    min-height: 100vh;
+  }
+  .paper-layout {
+    overflow: visible;
+  }
+  .orders-panel {
+    overflow: visible;
+    min-height: 0;
+  }
+  .orders-table-wrap {
+    overflow-x: auto;
+    overflow-y: visible;
+    max-height: none;
+  }
+
+  /* Nav: cho phép wrap trên màn nhỏ */
+  .top-nav {
+    flex-wrap: wrap;
+    padding: 0 4px;
+  }
+  .nav-link {
+    padding: 10px 10px;
+    font-size: 12px;
+  }
+
+  /* Overview: stack dọc gọn hơn */
+  .overview {
+    gap: 8px 12px;
+    padding: 8px 10px;
+  }
+  .overview input[type="number"] { width: 80px; }
+  .overview button { padding: 6px 10px; font-size: 12px; }
+  .overview .stat { font-size: 11px; padding: 3px 7px; }
+
+  /* Charts: stack dọc trên mobile thay vì ngang */
+  .paper-charts-row {
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+  .paper-chart-scroll {
+    max-height: 140px;
+  }
+
+  /* Table: chữ nhỏ hơn, cuộn ngang */
+  .orders-table {
+    font-size: 11px;
+  }
+  .orders-table th, .orders-table td {
+    padding: 5px 6px;
+  }
+}
+
+@media (max-width: 480px) {
+  .nav-link { padding: 8px 8px; font-size: 11px; }
+  .overview { gap: 6px 10px; }
+  .paper-chart-scroll { max-height: 120px; }
+}
+
 /* --- Trang Trade thật --- */
 .tab-real-placeholder {
   flex: 1;
