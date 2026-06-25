@@ -38,6 +38,22 @@
   }
 
   var hiddenMap = loadHiddenMap();
+  /** true khi đã bấm 👁 chưa bấm Lưu — không ghi đè bằng dữ liệu server giữa chừng */
+  var hiddenDirty = false;
+
+  function applyHiddenSyncFromServer(d) {
+    if (hiddenDirty || !d) return;
+    var hk = field(d, "hidden_trade_keys");
+    if (hk === undefined || hk === null) return;
+    hiddenMap = {};
+    if (Array.isArray(hk)) {
+      for (var i = 0; i < hk.length; i++) {
+        var k = String(hk[i] || "").trim();
+        if (k) hiddenMap[k] = true;
+      }
+    }
+    persistHidden();
+  }
 
   function persistHidden() {
     try {
@@ -467,6 +483,7 @@
       })
       .then(function (d) {
         lastStatus = d;
+        applyHiddenSyncFromServer(d);
         return fetch("/api/orders?slot=" + encodeURIComponent(String(slot)));
       })
       .then(function (r) {
@@ -551,8 +568,28 @@
   if (btnSaveHidden) {
     btnSaveHidden.addEventListener("click", function () {
       persistHidden();
-      syncOverviewBar();
-      alert("Đã lưu danh sách ẩn/hiện lệnh (trình duyệt).");
+      var keys = Object.keys(hiddenMap);
+      fetch(apiBase + "/hidden-trade-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trade_keys: keys }),
+      })
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (res) {
+          if (res.ok) {
+            hiddenDirty = false;
+            syncOverviewBar();
+            alert(
+              res.message ||
+                "Đã lưu danh sách ẩn/hiện (máy chủ — điện thoại và trình khác sau khi tải / làm mới trang)."
+            );
+          } else alert(res.error || "Lỗi");
+        })
+        .catch(function () {
+          alert("Lỗi kết nối");
+        });
     });
   }
   document.getElementById("btnClearHistory").addEventListener("click", function () {
@@ -564,6 +601,7 @@
       .then(function (d) {
         if (d.ok) {
           clearHiddenStorage();
+          hiddenDirty = false;
           clearOrderRowHighlight();
           refresh();
           alert(d.message || "Đã xóa toàn bộ lịch sử lệnh.");
@@ -684,6 +722,7 @@
     if (!tk) return;
     if (hiddenMap[tk]) delete hiddenMap[tk];
     else hiddenMap[tk] = true;
+    hiddenDirty = true;
     persistHidden();
     renderOrders(lastOrders);
     syncOverviewBar();

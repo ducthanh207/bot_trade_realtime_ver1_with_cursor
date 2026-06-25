@@ -12,11 +12,8 @@ import csv
 import io
 from flask import Flask, jsonify, request, render_template, Response, redirect, url_for
 
-from bot.paper_fees import (
-    closed_trade_fee_entry_exit_usdt,
-    linear_taker_fee_usdt,
-    wallet_balance_after_replay,
-)
+from bot.paper_fees import closed_trade_fee_entry_exit_usdt, linear_taker_fee_usdt
+from bot.paper_rescale import apply_new_initial_with_volumetric_rescale
 from bot.paper_ledger_audit import (
     infer_initial_capital as _infer_initial_capital,
     paper_ledger_meta as _paper_ledger_meta,
@@ -57,6 +54,19 @@ def _float_or_none_api(v):
         return x
     except (TypeError, ValueError):
         return None
+
+
+def _hidden_trade_keys_from_request():
+    """Đọc JSON body cho API lưu danh sách lệnh ẩn (trade_key). Trả (list|None, error_str|None)."""
+    data = request.get_json(force=True, silent=True) or {}
+    raw = data.get("trade_keys")
+    if raw is None:
+        raw = data.get("keys")
+    if raw is None:
+        return None, "Thiếu trade_keys (mảng các trade_key cần ẩn)"
+    if not isinstance(raw, list):
+        return None, "trade_keys phải là mảng"
+    return raw, None
 
 
 def _pct_change_bands_to_json(bands):
@@ -122,12 +132,6 @@ def get_status():
         if d.get("paper2_open_trade"):
             d["paper2_open_trade"] = _serialize(d["paper2_open_trade"])
         d["paper2_trades"] = _serialize(d.get("paper2_trades", []))
-        d["paper3_started_at"] = str(d["paper3_started_at"]) if d.get("paper3_started_at") else None
-        if d.get("paper3_last_trade"):
-            d["paper3_last_trade"] = _serialize(d["paper3_last_trade"])
-        if d.get("paper3_open_trade"):
-            d["paper3_open_trade"] = _serialize(d["paper3_open_trade"])
-        d["paper3_trades"] = _serialize(d.get("paper3_trades", []))
         if d.get("last_trade"):
             d["last_trade"] = _serialize(d["last_trade"])
         return d
@@ -157,11 +161,6 @@ def page_paper():
 @app.route("/paper2")
 def page_paper2():
     return _html_no_cache("paper2.html", nav_active="paper2")
-
-
-@app.route("/paper3")
-def page_paper3():
-    return _html_no_cache("paper3.html", nav_active="paper3")
 
 
 @app.route("/chart")
@@ -259,41 +258,6 @@ def api_status():
             d["paper2_lookback_display"] = int(getattr(_cfg, "LOOKBACK_TRADES", 15))
     except Exception:
         d["paper2_lookback_display"] = 15
-    open3 = d.get("paper3_open_trade")
-    if open3:
-        try:
-            from config import settings
-            client = _get_client()
-            df = client.get_klines(settings.SYMBOL, "1m", 1)
-            current_price = float(df["close"].iloc[-1]) if not df.empty else None
-        except Exception:
-            current_price = None
-        if current_price is not None:
-            entry = float(open3.get("entry_price") or 0)
-            size = float(open3.get("size") or 0)
-            side = str(open3.get("side", "")).upper()
-            if side == "LONG":
-                pnl_open3 = (current_price - entry) * size
-            else:
-                pnl_open3 = (entry - current_price) * size
-            balance3 = float(d.get("paper3_balance") or 0)
-            d["paper3_pnl_open"] = round(pnl_open3, 2)
-            d["paper3_capital_open"] = round(balance3 + pnl_open3, 2)
-        else:
-            d["paper3_pnl_open"] = 0.0
-            d["paper3_capital_open"] = float(d.get("paper3_balance") or 0)
-        d["paper3_orders_open_count"] = 1
-    else:
-        d["paper3_pnl_open"] = 0.0
-        d["paper3_capital_open"] = float(d.get("paper3_balance") or 0)
-        d["paper3_orders_open_count"] = 0
-    try:
-        from config import settings as _cfg
-        d["paper3_leverage_display"] = d.get("paper3_leverage") if d.get("paper3_leverage") is not None else _cfg.LEVERAGE
-        d["paper3_wallet_pct_display"] = d.get("paper3_wallet_pct") if d.get("paper3_wallet_pct") is not None else _cfg.WALLET_PCT
-    except Exception:
-        d["paper3_leverage_display"] = d.get("paper3_leverage") or 20.0
-        d["paper3_wallet_pct_display"] = d.get("paper3_wallet_pct") or 0.30
     try:
         from config import settings as _cfg2
         d["taker_fee"] = float(getattr(_cfg2, "TAKER_FEE", 0.0004))
@@ -304,20 +268,15 @@ def api_status():
         _tfee = float(getattr(_ctf, "TAKER_FEE", 0.0004))
         _lt1 = list(d.get("paper_trades") or [])
         _lt2 = list(d.get("paper2_trades") or [])
-        _lt3 = list(d.get("paper3_trades") or [])
         d["paper_replay_initial"] = _infer_initial_capital(
             _lt1, float(d.get("paper_initial_capital") or 0), _tfee
         )
         d["paper2_replay_initial"] = _infer_initial_capital(
             _lt2, float(d.get("paper2_initial_capital") or 0), _tfee
         )
-        d["paper3_replay_initial"] = _infer_initial_capital(
-            _lt3, float(d.get("paper3_initial_capital") or 0), _tfee
-        )
     except Exception:
         d["paper_replay_initial"] = float(d.get("paper_initial_capital") or 0)
         d["paper2_replay_initial"] = float(d.get("paper2_initial_capital") or 0)
-        d["paper3_replay_initial"] = float(d.get("paper3_initial_capital") or 0)
     return jsonify(d)
 
 
@@ -340,37 +299,11 @@ def api_paper_start():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-def _resync_slot_balance_from_initial(slot: int, new_initial: float):
-    """Đặt lại số dư ví theo mốc vốn + toàn bộ lệnh đóng + phí vào lệnh mở (nếu có)."""
-    from bot import state
-    from config import settings
-
-    taker = float(getattr(settings, "TAKER_FEE", 0.0004))
-    if int(slot) == 3:
-        trades = list(state.get_paper3_trades())
-        op = state.get_paper3_open_trade()
-        set_bal = state.set_paper3_balance
-    elif int(slot) == 2:
-        trades = list(state.get_paper2_trades())
-        op = state.get_paper2_open_trade()
-        set_bal = state.set_paper2_balance
-    else:
-        trades = list(state.get_paper_trades())
-        op = state.get_paper_open_trade()
-        set_bal = state.set_paper_balance
-    new_bal = wallet_balance_after_replay(trades, new_initial, taker, op)
-    if new_bal < 0:
-        raise ValueError(
-            "Mốc vốn quá thấp: sau khi tính lại theo lịch sử, ví âm. Hãy tăng vốn mốc hoặc xóa lịch sử."
-        )
-    set_bal(new_bal)
-
-
 @app.route("/api/paper/set-initial-capital", methods=["POST"])
 def api_paper_set_initial_capital():
     """
-    Lưu paper_initial_capital và đồng bộ lại paper_balance từ mốc này + toàn bộ lệnh đóng (+ phí vào nếu đang mở).
-    Lịch sử từng lệnh (profit, giá, size) giữ nguyên; chỉ ví & mốc replay thay đổi.
+    Lưu vốn mốc Paper 1: scale size/margin/notional/proportional với profit theo tỷ lệ vốn mới/cũ,
+    tính lại capital_before/after và balance (như backtest lại sizing).
     """
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -378,8 +311,8 @@ def api_paper_set_initial_capital():
         if capital <= 0:
             return jsonify({"ok": False, "error": "initial_capital phải > 0"}), 400
         from bot import state
-        state.set_paper_initial_capital(capital)
-        _resync_slot_balance_from_initial(1, capital)
+
+        info = apply_new_initial_with_volumetric_rescale(1, capital)
         try:
             from bot.paper_persistence import save_paper_state
             save_paper_state()
@@ -387,9 +320,10 @@ def api_paper_set_initial_capital():
             pass
         return jsonify({
             "ok": True,
-            "message": "Đã lưu mốc vốn Paper 1 và đồng bộ ví (balance) theo mốc + lịch sử. Cap After / %PnL / phí / PNL khớp chuỗi.",
+            "message": "Đã lưu mốc vốn Paper 1: rescale toàn bộ lệnh (size, margin, profit) theo tỷ lệ vốn mới/cũ và đồng bộ ví.",
             "paper_initial_capital": capital,
             "paper_balance": state.get_paper_balance(),
+            "rescale_ratio": info.get("ratio"),
         })
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
@@ -470,6 +404,33 @@ def api_paper_capital_rules():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/paper/hidden-trade-keys", methods=["POST"])
+def api_paper_hidden_trade_keys():
+    """Lưu danh sách trade_key lệnh đóng đang ẩn — đồng bộ mọi thiết bị (điện thoại / trình duyệt khác)."""
+    try:
+        raw, err = _hidden_trade_keys_from_request()
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        from bot import state
+
+        state.set_paper_hidden_trade_keys(raw)
+        try:
+            from bot.paper_persistence import save_paper_state
+
+            save_paper_state()
+        except Exception:
+            pass
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Đã lưu danh sách ẩn lệnh (máy chủ).",
+                "paper_hidden_trade_keys": state.get_paper_hidden_trade_keys(),
+            }
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/paper2/start", methods=["POST"])
 def api_paper2_start():
     try:
@@ -491,15 +452,15 @@ def api_paper2_start():
 
 @app.route("/api/paper2/set-initial-capital", methods=["POST"])
 def api_paper2_set_initial_capital():
-    """Lưu paper2_initial_capital và đồng bộ paper2_balance từ mốc + lịch sử (giữ từng lệnh)."""
+    """Lưu vốn mốc Paper 2 + rescale toàn bộ lệnh theo tỷ lệ vốn mới/cũ."""
     try:
         data = request.get_json(force=True, silent=True) or {}
         capital = float(data.get("initial_capital", 0))
         if capital <= 0:
             return jsonify({"ok": False, "error": "initial_capital phải > 0"}), 400
         from bot import state
-        state.set_paper2_initial_capital(capital)
-        _resync_slot_balance_from_initial(2, capital)
+
+        info = apply_new_initial_with_volumetric_rescale(2, capital)
         try:
             from bot.paper_persistence import save_paper_state
             save_paper_state()
@@ -507,9 +468,10 @@ def api_paper2_set_initial_capital():
             pass
         return jsonify({
             "ok": True,
-            "message": "Đã lưu mốc vốn Paper 2 và đồng bộ ví theo mốc + lịch sử.",
+            "message": "Đã lưu mốc vốn Paper 2: rescale toàn bộ lệnh theo tỷ lệ vốn mới/cũ và đồng bộ ví.",
             "paper2_initial_capital": capital,
             "paper2_balance": state.get_paper2_balance(),
+            "rescale_ratio": info.get("ratio"),
         })
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
@@ -588,6 +550,32 @@ def api_paper2_capital_rules():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/paper2/hidden-trade-keys", methods=["POST"])
+def api_paper2_hidden_trade_keys():
+    try:
+        raw, err = _hidden_trade_keys_from_request()
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        from bot import state
+
+        state.set_paper2_hidden_trade_keys(raw)
+        try:
+            from bot.paper_persistence import save_paper_state
+
+            save_paper_state()
+        except Exception:
+            pass
+        return jsonify(
+            {
+                "ok": True,
+                "message": "Đã lưu danh sách ẩn lệnh Paper 2 (máy chủ).",
+                "paper2_hidden_trade_keys": state.get_paper2_hidden_trade_keys(),
+            }
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/paper2/strategy", methods=["POST"])
 def api_paper2_strategy():
     """Lưu lookback %change (số lệnh đã đóng trong cửa sổ — không phải số nến)."""
@@ -612,150 +600,6 @@ def api_paper2_strategy():
         })
     except (TypeError, ValueError) as e:
         return jsonify({"ok": False, "error": "lookback_trades phải là số từ 1 đến 200: " + str(e)}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/paper3/start", methods=["POST"])
-def api_paper3_start():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        capital = float(data.get("initial_capital", 0))
-        if capital <= 0:
-            return jsonify({"ok": False, "error": "initial_capital phai > 0"}), 400
-        from bot import state
-        state.paper3_start(capital)
-        try:
-            from bot.paper_persistence import save_paper_state
-            save_paper_state()
-        except Exception:
-            pass
-        return jsonify({"ok": True, "message": "Da kich hoat Paper trade 3 (phuong phap 3)."})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/paper3/set-initial-capital", methods=["POST"])
-def api_paper3_set_initial_capital():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        capital = float(data.get("initial_capital", 0))
-        if capital <= 0:
-            return jsonify({"ok": False, "error": "initial_capital phai > 0"}), 400
-        from bot import state
-        state.set_paper3_initial_capital(capital)
-        _resync_slot_balance_from_initial(3, capital)
-        try:
-            from bot.paper_persistence import save_paper_state
-            save_paper_state()
-        except Exception:
-            pass
-        return jsonify({
-            "ok": True,
-            "message": "Da luu moc von Paper 3 va dong bo vi theo moc + lich su.",
-            "paper3_initial_capital": capital,
-            "paper3_balance": state.get_paper3_balance(),
-        })
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/paper3/clear-history", methods=["POST"])
-def api_paper3_clear_history():
-    try:
-        from bot import state
-        state.paper3_clear_history()
-        try:
-            from bot.paper_persistence import save_paper_state
-            save_paper_state()
-        except Exception:
-            pass
-        return jsonify({"ok": True, "message": "Da xoa toan bo lich su Paper 3."})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/paper3/pause", methods=["POST"])
-def api_paper3_pause():
-    try:
-        from bot import state
-        state.paper3_pause()
-        return jsonify({"ok": True, "message": "Da tam dung Paper 3."})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/paper3/stop", methods=["POST"])
-def api_paper3_stop():
-    try:
-        from bot import state
-        state.paper3_stop()
-        return jsonify({"ok": True, "message": "Da dung Paper 3."})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/paper3/capital-rules", methods=["POST"])
-def api_paper3_capital_rules():
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        leverage = data.get("leverage")
-        wallet_pct = data.get("wallet_pct")
-        if leverage is not None:
-            leverage = float(leverage)
-            if leverage < 1 or leverage > 125:
-                return jsonify({"ok": False, "error": "Don bay phai tu 1 den 125"}), 400
-        if wallet_pct is not None:
-            wallet_pct = float(wallet_pct)
-            if wallet_pct < 0.01 or wallet_pct > 1.0:
-                return jsonify({"ok": False, "error": "% von vao lenh phai tu 1% den 100%"}), 400
-        from bot import state
-        if leverage is not None:
-            state.set_paper3_leverage(leverage)
-        if wallet_pct is not None:
-            state.set_paper3_wallet_pct(wallet_pct)
-        try:
-            from bot.paper_persistence import save_paper_state
-            save_paper_state()
-        except Exception:
-            pass
-        return jsonify({
-            "ok": True,
-            "message": "Da cap nhat quy tac von Paper 3.",
-            "paper3_leverage": state.get_paper3_leverage(),
-            "paper3_wallet_pct": state.get_paper3_wallet_pct(),
-        })
-    except (TypeError, ValueError) as e:
-        return jsonify({"ok": False, "error": "Gia tri khong hop le: " + str(e)}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/paper3/close", methods=["POST"])
-def api_paper3_close():
-    try:
-        result = _close_paper_slot(3)
-        ok, msg, extra, closed = result[0], result[1], result[2], result[3] if len(result) > 3 else None
-        if not ok:
-            return jsonify({"ok": False, "error": msg}), 400
-        try:
-            from bot.paper_persistence import save_paper_state
-            save_paper_state()
-        except Exception:
-            pass
-        if closed:
-            try:
-                from telegram.notifier import notify_trade_closed
-                notify_trade_closed(closed, source="web", paper_slot=3)
-            except Exception:
-                try:
-                    from telegram.notifier import send_message
-                    send_message(f"[PAPER3] Dong lenh tu Web\nPnL: {extra.get('pnl', 0):+.2f} USDT")
-                except Exception:
-                    pass
-        return jsonify({"ok": True, "message": msg, **(extra or {})})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -837,14 +681,7 @@ def _close_paper_slot(slot: int):
     from bot import state
     from config import settings
     from datetime import datetime
-    if int(slot) == 3:
-        open_trade = state.get_paper3_open_trade()
-        get_balance = state.get_paper3_balance
-        set_open = state.set_paper3_open_trade
-        set_last = state.set_paper3_last_trade
-        append_trade = state.append_paper3_trade
-        set_balance = state.set_paper3_balance
-    elif int(slot) == 2:
+    if int(slot) == 2:
         open_trade = state.get_paper2_open_trade()
         get_balance = state.get_paper2_balance
         set_open = state.set_paper2_open_trade
@@ -1146,11 +983,7 @@ def _orders_json_for_slot(slot: int):
     if status.get("error"):
         return None, status["error"]
     slot = int(slot)
-    if slot == 3:
-        open_trade = status.get("paper3_open_trade")
-        trades = list(status.get("paper3_trades") or [])
-        leverage = state.get_paper3_leverage() or getattr(settings, "LEVERAGE", 20.0)
-    elif slot == 2:
+    if slot == 2:
         open_trade = status.get("paper2_open_trade")
         trades = list(status.get("paper2_trades") or [])
         leverage = state.get_paper2_leverage() or getattr(settings, "LEVERAGE", 20.0)
@@ -1160,9 +993,7 @@ def _orders_json_for_slot(slot: int):
         leverage = state.get_paper_leverage() or getattr(settings, "LEVERAGE", 20.0)
     chronological = list(trades)
     taker_fee = float(getattr(settings, "TAKER_FEE", 0.0004))
-    if slot == 3:
-        init_cap = float(status.get("paper3_initial_capital") or 0)
-    elif slot == 2:
+    if slot == 2:
         init_cap = float(status.get("paper2_initial_capital") or 0)
     else:
         init_cap = float(status.get("paper_initial_capital") or 0)
@@ -1280,11 +1111,7 @@ def _orders_for_csv(slot: int = 1):
     if status.get("error"):
         return [], None
     slot = int(slot)
-    if slot == 3:
-        open_trade = status.get("paper3_open_trade")
-        trades = list(status.get("paper3_trades") or [])
-        leverage = state.get_paper3_leverage() or getattr(settings, "LEVERAGE", 20.0)
-    elif slot == 2:
+    if slot == 2:
         open_trade = status.get("paper2_open_trade")
         trades = list(status.get("paper2_trades") or [])
         leverage = state.get_paper2_leverage() or getattr(settings, "LEVERAGE", 20.0)
@@ -1295,9 +1122,7 @@ def _orders_for_csv(slot: int = 1):
     symbol = getattr(settings, "SYMBOL", "BTCUSDT")
     chronological = list(trades)
     taker_fee = float(getattr(settings, "TAKER_FEE", 0.0004))
-    if slot == 3:
-        init_cap = float(status.get("paper3_initial_capital") or 0)
-    elif slot == 2:
+    if slot == 2:
         init_cap = float(status.get("paper2_initial_capital") or 0)
     else:
         init_cap = float(status.get("paper_initial_capital") or 0)
@@ -1446,7 +1271,7 @@ def api_export_csv():
             w.writeheader()
             w.writerows(rows)
         now = datetime.now(_tz_app)
-        suffix = f"_p{slot}" if slot in (2, 3) else ""
+        suffix = f"_p{slot}" if slot == 2 else ""
         filename = f"orders_{symbol}{suffix}_{now.strftime('%Y%m%d_%H%M')}.csv"
         return Response(
             buf.getvalue(),

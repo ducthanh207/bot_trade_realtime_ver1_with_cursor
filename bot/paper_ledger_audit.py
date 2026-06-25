@@ -128,5 +128,6 @@ def reconcile_trades(
             "Cột profit = PnL vị thế (đã trừ phí thoát); Excel: initial + SUM(wallet_change) với wallet_change = profit − entry_fee.",
             "Tổng phí / cột Phí: bot.paper_fees (taker × notional vào + ra), cùng công thức paper_loop, exit_engine, Telegram, state.",
             "PNL = SUM(profit đóng); profit đã trừ phí thoát — không dùng (mốc + PNL − tổng phí) cho ví. Ví (flat): mốc − SUM(phí vào) + SUM(profit).",
+            "«Lưu mốc vốn» (API): rescale size/margin/profit theo vốn mới/cũ (bot.paper_rescale) rồi tính lại ví — PNL tổng đổi khi đổi tỷ lệ vốn.",
         ],
     }

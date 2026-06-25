@@ -5,7 +5,7 @@
   <header class="overview">
     <label>Vốn (USDT)</label>
     <input type="number" id="initial_capital" value="1000" min="1" step="1">
-    <button type="button" class="btn-rules" id="btnSetInitialCapital" title="Lưu mốc vốn và đồng bộ ví (balance) theo mốc + toàn bộ lệnh trong state (kể cả lệnh đang ẩn trên UI). Giữ profit/giá/size từng lệnh.">Lưu mốc vốn</button>
+    <button type="button" class="btn-rules" id="btnSetInitialCapital" title="Đổi vốn mốc: scale size/margin/profit mọi lệnh theo tỷ lệ vốn mới/cũ (như backtest lại sizing). Giá vào/ra giữ nguyên.">Lưu mốc vốn</button>
     <button class="start" id="btnStart">Kích hoạt</button>
     <button class="pause" id="btnPause">Tạm dừng</button>
     <button class="stop" id="btnStop">Dừng</button>
@@ -47,7 +47,7 @@
     <h3 class="orders-panel-title">
       <span class="orders-title-text">Lệnh (mới nhất trên cùng)</span>
       <span class="orders-title-actions">
-        <button type="button" class="btn-save-hidden" id="btnSaveHidden" title="Lưu danh sách lệnh ẩn (giữ khi F5)">Lưu</button>
+        <button type="button" class="btn-save-hidden" id="btnSaveHidden" title="Lưu danh sách lệnh ẩn lên máy chủ (điện thoại / trình khác đồng bộ). Bấm 👁 chỉ đổi tạm trên máy này cho đến khi Lưu.">Lưu</button>
         <button type="button" class="btn-export" id="btnExportCsv">Xuất CSV</button>
       </span>
     </h3>
