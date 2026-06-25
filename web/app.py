@@ -760,6 +760,80 @@ def api_paper3_close():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/paper3/backtest", methods=["POST"])
+def api_paper3_backtest():
+    try:
+        from datetime import datetime, timezone, timedelta
+        from bot.paper3_backtest import run_backtest
+        from config import settings as _cfg
+        data = request.get_json(silent=True) or {}
+
+        start_str = data.get("start_date", "")
+        end_str = data.get("end_date", "")
+        initial_capital = float(data.get("initial_capital", 1000))
+        leverage = float(data.get("leverage") or state.get_paper3_leverage() or _cfg.LEVERAGE)
+        wallet_pct_raw = float(data.get("wallet_pct") or state.get_paper3_wallet_pct() or _cfg.WALLET_PCT)
+        wallet_pct = wallet_pct_raw / 100.0 if wallet_pct_raw > 1 else wallet_pct_raw
+        taker_fee = float(getattr(_cfg, "TAKER_FEE", 0.0004))
+        load_to_state = bool(data.get("load_to_state", True))
+
+        tz7 = timezone(timedelta(hours=7))
+        try:
+            start_dt = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=tz7)
+        except Exception:
+            return jsonify({"error": "start_date không hợp lệ (dùng YYYY-MM-DD)"}), 400
+        try:
+            end_dt = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=tz7) if end_str else datetime.now(tz7)
+            end_dt = end_dt.replace(hour=23, minute=59, second=59)
+        except Exception:
+            end_dt = datetime.now(tz7)
+
+        symbol = getattr(_cfg, "SYMBOL", "BTCUSDT")
+        result = run_backtest(
+            symbol=symbol,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            initial_capital=initial_capital,
+            leverage=leverage,
+            wallet_pct=wallet_pct,
+            taker_fee=taker_fee,
+        )
+
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+
+        if load_to_state:
+            state.paper3_clear_history()
+            state.set_paper3_initial_capital(initial_capital)
+            state.set_paper3_balance(result["final_balance"])
+            for t in result["trades"]:
+                state.append_paper3_trade(t)
+            if result["trades"]:
+                state.set_paper3_last_trade(result["trades"][-1])
+            if state.get_paper3_status() == "stopped":
+                state.paper3_start(result["final_balance"])
+                state.set_paper3_initial_capital(initial_capital)
+            try:
+                from bot.paper_persistence import save_paper_state
+                save_paper_state()
+            except Exception:
+                pass
+
+        return jsonify({
+            "ok": True,
+            "total_trades": result["total_trades"],
+            "wins": result["wins"],
+            "losses": result["losses"],
+            "winrate": result["winrate"],
+            "total_pnl": result["total_pnl"],
+            "final_balance": result["final_balance"],
+            "loaded": load_to_state,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "detail": traceback.format_exc()}), 500
+
+
 @app.route("/api/paper2/close", methods=["POST"])
 def api_paper2_close():
     try:
