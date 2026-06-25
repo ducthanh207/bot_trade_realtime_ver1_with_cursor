@@ -43,6 +43,21 @@ _paper2_wallet_pct = None
 # Lookback %change (số lệnh đã đóng trong cửa sổ tính trung bình) — None = dùng config LOOKBACK_TRADES
 _paper2_lookback_trades = None
 
+# ---------- Paper trade 3 (phương pháp 3 — Exit B + circuit breaker) ----------
+_paper3_initial_capital = 0.0
+_paper3_balance = 0.0
+_paper3_started_at = None
+_paper3_status = "stopped"
+_paper3_open_trade = None
+_paper3_trades = []
+_paper3_last_trade = None
+_paper3_leverage = None
+_paper3_wallet_pct = None
+# Method 3 circuit breaker state
+_paper3_consecutive_losses = 0
+_paper3_cb_light_until = None  # datetime or None
+_paper3_cb_heavy_until = None  # datetime or None
+
 
 def set_balance(value: float):
     global _balance
@@ -372,6 +387,159 @@ def paper2_stop():
     _paper2_status = "stopped"
 
 
+# ---------- Paper trade 3 ----------
+def set_paper3_initial_capital(value: float):
+    global _paper3_initial_capital
+    _paper3_initial_capital = value
+
+
+def get_paper3_initial_capital() -> float:
+    return _paper3_initial_capital
+
+
+def set_paper3_balance(value: float):
+    global _paper3_balance
+    _paper3_balance = value
+
+
+def get_paper3_balance() -> float:
+    return _paper3_balance
+
+
+def set_paper3_started_at(dt):
+    global _paper3_started_at
+    _paper3_started_at = dt
+
+
+def get_paper3_started_at():
+    return _paper3_started_at
+
+
+def set_paper3_status(value: str):
+    global _paper3_status
+    if value in ("stopped", "running", "paused"):
+        _paper3_status = value
+
+
+def get_paper3_status() -> str:
+    return _paper3_status
+
+
+def set_paper3_open_trade(trade):
+    global _paper3_open_trade
+    _paper3_open_trade = trade
+
+
+def get_paper3_open_trade():
+    return _paper3_open_trade
+
+
+def append_paper3_trade(trade: dict):
+    global _paper3_trades
+    _paper3_trades.append(trade)
+
+
+def get_paper3_trades():
+    return list(_paper3_trades)
+
+
+def restore_paper3_trades(trades: list):
+    global _paper3_trades
+    _paper3_trades = list(trades) if trades else []
+
+
+def set_paper3_last_trade(trade):
+    global _paper3_last_trade
+    _paper3_last_trade = trade
+
+
+def get_paper3_last_trade():
+    return _paper3_last_trade
+
+
+def get_paper3_leverage():
+    return _paper3_leverage
+
+
+def set_paper3_leverage(value):
+    global _paper3_leverage
+    _paper3_leverage = float(value) if value is not None else None
+
+
+def get_paper3_wallet_pct():
+    return _paper3_wallet_pct
+
+
+def set_paper3_wallet_pct(value):
+    global _paper3_wallet_pct
+    _paper3_wallet_pct = float(value) if value is not None else None
+
+
+def get_paper3_consecutive_losses() -> int:
+    return _paper3_consecutive_losses
+
+
+def set_paper3_consecutive_losses(v: int):
+    global _paper3_consecutive_losses
+    _paper3_consecutive_losses = int(v)
+
+
+def get_paper3_cb_light_until():
+    return _paper3_cb_light_until
+
+
+def set_paper3_cb_light_until(dt):
+    global _paper3_cb_light_until
+    _paper3_cb_light_until = dt
+
+
+def get_paper3_cb_heavy_until():
+    return _paper3_cb_heavy_until
+
+
+def set_paper3_cb_heavy_until(dt):
+    global _paper3_cb_heavy_until
+    _paper3_cb_heavy_until = dt
+
+
+def paper3_start(initial_capital: float):
+    global _paper3_initial_capital, _paper3_balance, _paper3_started_at, _paper3_status
+    global _paper3_open_trade
+    _paper3_open_trade = None
+    _paper3_status = "running"
+    if _paper3_started_at is None:
+        _paper3_initial_capital = float(initial_capital)
+        _paper3_balance = float(initial_capital)
+        _paper3_started_at = datetime.now(_tz_app)
+    else:
+        _paper3_initial_capital = float(initial_capital) if initial_capital and initial_capital > 0 else _paper3_initial_capital
+
+
+def paper3_clear_history():
+    global _paper3_trades, _paper3_last_trade, _paper3_open_trade
+    global _paper3_initial_capital, _paper3_balance, _paper3_started_at, _paper3_status
+    global _paper3_consecutive_losses, _paper3_cb_light_until, _paper3_cb_heavy_until
+    _paper3_trades = []
+    _paper3_last_trade = None
+    _paper3_open_trade = None
+    _paper3_started_at = None
+    _paper3_status = "stopped"
+    _paper3_balance = _paper3_initial_capital if _paper3_initial_capital else 0
+    _paper3_consecutive_losses = 0
+    _paper3_cb_light_until = None
+    _paper3_cb_heavy_until = None
+
+
+def paper3_pause():
+    global _paper3_status
+    _paper3_status = "paused"
+
+
+def paper3_stop():
+    global _paper3_status
+    _paper3_status = "stopped"
+
+
 def to_status_dict():
     """Dict cho web/Telegram. Ưu tiên paper trade."""
     pos = get_position()
@@ -395,6 +563,15 @@ def to_status_dict():
     winrate2 = (wins2 / n2 * 100.0) if n2 else 0.0
     paper2_started = get_paper2_started_at()
 
+    paper3_trades = get_paper3_trades()
+    n3 = len(paper3_trades)
+    wins3 = sum(1 for t in paper3_trades if float(t.get("profit", 0)) > 0)
+    total_pnl3 = sum(float(t.get("profit", 0)) for t in paper3_trades)
+    long_ct3 = sum(1 for t in paper3_trades if str(t.get("side", "")).upper() == "LONG")
+    short_ct3 = n3 - long_ct3
+    winrate3 = (wins3 / n3 * 100.0) if n3 else 0.0
+    paper3_started = get_paper3_started_at()
+
     try:
         from config import settings as _fee_cfg
         from bot.paper_fees import slot_total_fees_usdt
@@ -402,9 +579,11 @@ def to_status_dict():
         _tf = float(getattr(_fee_cfg, "TAKER_FEE", 0.0004))
         _paper_total_fees = slot_total_fees_usdt(paper_trades, get_paper_open_trade(), _tf)
         _paper2_total_fees = slot_total_fees_usdt(paper2_trades, get_paper2_open_trade(), _tf)
+        _paper3_total_fees = slot_total_fees_usdt(paper3_trades, get_paper3_open_trade(), _tf)
     except Exception:
         _paper_total_fees = 0.0
         _paper2_total_fees = 0.0
+        _paper3_total_fees = 0.0
 
     return {
         "balance": get_balance(),
@@ -446,4 +625,23 @@ def to_status_dict():
         "paper2_leverage": _paper2_leverage,
         "paper2_wallet_pct": _paper2_wallet_pct,
         "paper2_lookback_trades": _paper2_lookback_trades,
+        # Paper 3 (phương pháp 3)
+        "paper3_initial_capital": get_paper3_initial_capital(),
+        "paper3_balance": get_paper3_balance(),
+        "paper3_started_at": paper3_started.isoformat() if paper3_started else None,
+        "paper3_status": get_paper3_status(),
+        "paper3_open_trade": get_paper3_open_trade(),
+        "paper3_trades": paper3_trades,
+        "paper3_last_trade": get_paper3_last_trade(),
+        "paper3_trades_count": n3,
+        "paper3_winrate": round(winrate3, 2),
+        "paper3_total_pnl": round(total_pnl3, 2),
+        "paper3_total_fees": _paper3_total_fees,
+        "paper3_long_count": long_ct3,
+        "paper3_short_count": short_ct3,
+        "paper3_leverage": _paper3_leverage,
+        "paper3_wallet_pct": _paper3_wallet_pct,
+        "paper3_consecutive_losses": _paper3_consecutive_losses,
+        "paper3_cb_light_until": _paper3_cb_light_until.isoformat() if _paper3_cb_light_until else None,
+        "paper3_cb_heavy_until": _paper3_cb_heavy_until.isoformat() if _paper3_cb_heavy_until else None,
     }

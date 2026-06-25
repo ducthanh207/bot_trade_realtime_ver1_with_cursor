@@ -54,7 +54,7 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
     atr = open_trade["atr"]
     high = row_1m["high"]
     low = row_1m["low"]
-    mult = settings.ATR_MULTIPLIER
+    mult = open_trade.get("atr_multiplier_override") or settings.ATR_MULTIPLIER
     trail_dist = atr * mult
 
     if side == "LONG":
@@ -77,6 +77,38 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
 
 def max_loss_from_capital(open_trade: dict) -> float:
     return open_trade["capital_before"] * settings.MAX_STOP_CAPITAL_PCT
+
+
+def m3_adx_zone(adx_value: float):
+    """Tra ve (allow_entry, size_multiplier) theo ADX 3 vung."""
+    from config import settings
+    if adx_value < settings.M3_ADX_LOW:
+        return False, 0.0
+    if adx_value < settings.M3_ADX_HIGH:
+        return True, settings.M3_ADX_MID_SIZE
+    return True, 1.0
+
+
+def m3_streak_multiplier(consecutive_losses: int) -> float:
+    from config import settings
+    return max(settings.M3_SIZING_FLOOR, 1.0 - consecutive_losses * settings.M3_SIZING_STEP)
+
+
+def m3_atr_multiplier(entry_time) -> float:
+    """Grace period: dung multiplier rong hon trong M3_ATR_GRACE_HOURS dau."""
+    from config import settings
+    from datetime import datetime, timezone
+    try:
+        now = datetime.now(timezone.utc)
+        if hasattr(entry_time, "tzinfo") and entry_time.tzinfo is not None:
+            elapsed_hours = (now - entry_time).total_seconds() / 3600
+        else:
+            elapsed_hours = settings.M3_ATR_GRACE_HOURS + 1
+        if elapsed_hours < settings.M3_ATR_GRACE_HOURS:
+            return settings.M3_ATR_MULTIPLIER_GRACE
+    except Exception:
+        pass
+    return settings.M3_ATR_MULTIPLIER
 
 
 def limit_pnl_and_exit_price(side: str, entry: float, size: float, pnl_raw: float, max_loss: float):
