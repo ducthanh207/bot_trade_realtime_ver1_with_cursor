@@ -549,7 +549,6 @@ def to_status_dict():
     paper_trades = get_paper_trades()
     n = len(paper_trades)
     wins = sum(1 for t in paper_trades if float(t.get("profit", 0)) > 0)
-    total_pnl = sum(float(t.get("profit", 0)) for t in paper_trades)
     long_ct = sum(1 for t in paper_trades if str(t.get("side", "")).upper() == "LONG")
     short_ct = n - long_ct
     winrate = (wins / n * 100.0) if n else 0.0
@@ -557,7 +556,6 @@ def to_status_dict():
     paper2_trades = get_paper2_trades()
     n2 = len(paper2_trades)
     wins2 = sum(1 for t in paper2_trades if float(t.get("profit", 0)) > 0)
-    total_pnl2 = sum(float(t.get("profit", 0)) for t in paper2_trades)
     long_ct2 = sum(1 for t in paper2_trades if str(t.get("side", "")).upper() == "LONG")
     short_ct2 = n2 - long_ct2
     winrate2 = (wins2 / n2 * 100.0) if n2 else 0.0
@@ -566,7 +564,6 @@ def to_status_dict():
     paper3_trades = get_paper3_trades()
     n3 = len(paper3_trades)
     wins3 = sum(1 for t in paper3_trades if float(t.get("profit", 0)) > 0)
-    total_pnl3 = sum(float(t.get("profit", 0)) for t in paper3_trades)
     long_ct3 = sum(1 for t in paper3_trades if str(t.get("side", "")).upper() == "LONG")
     short_ct3 = n3 - long_ct3
     winrate3 = (wins3 / n3 * 100.0) if n3 else 0.0
@@ -574,16 +571,31 @@ def to_status_dict():
 
     try:
         from config import settings as _fee_cfg
-        from bot.paper_fees import slot_total_fees_usdt
+        from bot.paper_fees import slot_total_fees_usdt, linear_taker_fee_usdt
 
         _tf = float(getattr(_fee_cfg, "TAKER_FEE", 0.0004))
         _paper_total_fees = slot_total_fees_usdt(paper_trades, get_paper_open_trade(), _tf)
         _paper2_total_fees = slot_total_fees_usdt(paper2_trades, get_paper2_open_trade(), _tf)
         _paper3_total_fees = slot_total_fees_usdt(paper3_trades, get_paper3_open_trade(), _tf)
+
+        # True net PNL = profit (raw - exit_fee) - entry_fee per trade
+        def _net_pnl(trades, tf):
+            return sum(
+                float(t.get("profit", 0)) - linear_taker_fee_usdt(
+                    float(t.get("size", 0)), float(t.get("entry_price", 0)), tf
+                )
+                for t in trades
+            )
+        total_pnl = _net_pnl(paper_trades, _tf)
+        total_pnl2 = _net_pnl(paper2_trades, _tf)
+        total_pnl3 = _net_pnl(paper3_trades, _tf)
     except Exception:
         _paper_total_fees = 0.0
         _paper2_total_fees = 0.0
         _paper3_total_fees = 0.0
+        total_pnl = sum(float(t.get("profit", 0)) for t in paper_trades)
+        total_pnl2 = sum(float(t.get("profit", 0)) for t in paper2_trades)
+        total_pnl3 = sum(float(t.get("profit", 0)) for t in paper3_trades)
 
     return {
         "balance": get_balance(),

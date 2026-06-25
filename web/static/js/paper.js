@@ -177,7 +177,9 @@
     var sumPnl = 0;
     for (var j = 0; j < visible.length; j++) {
       var p = Number(visible[j].pnl) || 0;
-      sumPnl += p;
+      // True net PNL per trade = profit (raw-exit_fee) minus entry fee
+      var feeIn = linearFeeUsdt(visible[j].size, visible[j].entry_price, taker);
+      sumPnl += p - feeIn;
       if (p > 0) wins++;
     }
     var wr = done > 0 ? (wins / done) * 100 : 0;
@@ -536,7 +538,40 @@
       });
   });
   document.getElementById("btnExportCsv").addEventListener("click", function () {
-    window.location.href = "/api/export/csv?slot=" + encodeURIComponent(String(slot));
+    // Generate CSV client-side so hidden trades are excluded
+    var visible = lastOrders.filter(function(o) {
+      if (orderIsOpen(o)) return false; // exclude open trade from export
+      var tk = String(o.trade_key || "");
+      return !tk || !hiddenMap[tk]; // exclude hidden
+    });
+    if (!visible.length) { alert("Không có lệnh đã đóng để xuất."); return; }
+
+    var cols = ["id","side","entry_time","entry_price","exit_time","exit_price","pnl","entry_fee","fee_exit","fee","pct_pnl","pct_pnl_capital","capital_after","exit_reason","size","symbol"];
+    var rows = [cols.join(",")];
+    visible.forEach(function(o, i) {
+      var row = cols.map(function(c) {
+        var v = o[c] != null ? o[c] : "";
+        var s = String(v);
+        if (s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0) {
+          s = '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      });
+      rows.push(row.join(","));
+    });
+
+    var csv = rows.join("\n");
+    var blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    var now = new Date();
+    var ts = now.getFullYear() + ("0"+(now.getMonth()+1)).slice(-2) + ("0"+now.getDate()).slice(-2) + "_" + ("0"+now.getHours()).slice(-2) + ("0"+now.getMinutes()).slice(-2);
+    a.href = url;
+    a.download = "orders_slot" + slot + "_" + ts + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   });
   document.getElementById("btnStop").addEventListener("click", function () {
     fetch(apiBase + "/stop", { method: "POST" })
