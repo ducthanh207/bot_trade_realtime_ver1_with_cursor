@@ -17,7 +17,7 @@ from config import settings
 from bot.paper_fees import linear_taker_fee_usdt
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 from strategy.signals import long_exit, long_exit_early, short_exit, short_exit_early
-from strategy.strategies.registry import METHOD_1, METHOD_2
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3
 from strategy.risk import (
     check_atr_trailing,
     limit_pnl_and_exit_price,
@@ -168,6 +168,24 @@ def compute_exit_candidates(
             exit_px = px_lim if px_lim is not None else exit_px_ref
             fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT"))
+
+    # ---------- Phương pháp 3: Exit B (tang manh — nguong + slope) ----------
+    if method == METHOD_3 and df_4h_raw is not None and not df_4h_raw.empty:
+        from strategy.signals import long_early_exit_strong_b, short_early_exit_strong_b
+        from config import settings as _s3
+        confirm_bars = getattr(_s3, "M3_EARLY_EXIT_B_CONFIRM_BARS", 2)
+        i_last = len(df_4h_raw) - 1
+        if apply_4h_layer and allow_early_exit:
+            if side == "LONG":
+                strong_b = long_early_exit_strong_b(df_4h_raw, i_last, confirm_bars)
+            else:
+                strong_b = short_early_exit_strong_b(df_4h_raw, i_last, confirm_bars)
+            if strong_b:
+                pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
+                pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
+                exit_px = px_lim if px_lim is not None else exit_px_ref
+                fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
+                candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT_B"))
 
     # ---------- Phương pháp 2: TP theo %change ----------
     if method == METHOD_2 and df_4h_raw is not None and not df_4h_raw.empty:

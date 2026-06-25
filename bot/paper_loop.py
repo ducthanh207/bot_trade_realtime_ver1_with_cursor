@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Vòng lặp paper trade: hai slot song song — Paper (phương pháp 1) và Paper 2 (phương pháp 2).
+Vòng lặp paper trade: ba slot song song — Paper 1/2/3.
 Dùng giá thật từ Binance (klines); chỉ cập nhật state, không gọi sàn.
 Slot stopped: bỏ qua; paused: vẫn thoát lệnh, không mở mới.
 """
 
 import time
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from config import settings as _settings
 
 _tz_app = getattr(_settings, "GMT7", timezone.utc)
@@ -25,7 +25,9 @@ from strategy import (
     pick_best_exit,
 )
 from strategy.strategies.paper_slots import method_for_paper_slot
-from strategy.strategies.registry import uses_pct_change_bands
+from strategy.strategies.registry import uses_pct_change_bands, METHOD_3
+from strategy.indicators import add_indicators_m3
+from strategy.risk import m3_adx_zone, m3_streak_multiplier, m3_atr_multiplier
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 import bot.state as state
 
@@ -95,8 +97,60 @@ def _paper_slot_configs():
                 "get_wct": state.get_paper2_wallet_pct,
             },
         ),
+        (
+            3,
+            {
+                "get_status": state.get_paper3_status,
+                "get_balance": state.get_paper3_balance,
+                "set_balance": state.set_paper3_balance,
+                "get_open": state.get_paper3_open_trade,
+                "set_open": state.set_paper3_open_trade,
+                "append_trade": state.append_paper3_trade,
+                "set_last": state.set_paper3_last_trade,
+                "get_lev": state.get_paper3_leverage,
+                "get_wct": state.get_paper3_wallet_pct,
+            },
+        ),
     ]
     return [(sid, method_for_paper_slot(sid), api) for sid, api in apis]
+
+
+def _update_m3_circuit_breaker(pnl: float, balance: float, closed_trade: dict):
+    """Cap nhat circuit breaker Method 3 sau khi dong lenh."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    if pnl < 0:
+        losses = state.get_paper3_consecutive_losses() + 1
+    else:
+        losses = 0
+    state.set_paper3_consecutive_losses(losses)
+
+    # Light circuit breaker
+    if losses >= settings.M3_CB_HEAVY_STREAK:
+        heavy_until = now + timedelta(hours=settings.M3_CB_HEAVY_BARS * 4)
+        state.set_paper3_cb_heavy_until(heavy_until)
+        state.set_paper3_cb_light_until(None)
+    elif losses >= settings.M3_CB_LIGHT_STREAK:
+        light_until = now + timedelta(hours=settings.M3_CB_LIGHT_BARS * 4)
+        state.set_paper3_cb_light_until(light_until)
+
+    # Heavy: drawdown check over M3_CB_HEAVY_DD_DAYS days
+    try:
+        cutoff = now - timedelta(days=settings.M3_CB_HEAVY_DD_DAYS)
+        trades3 = state.get_paper3_trades()
+        recent = [t for t in trades3 if t.get("entry_time") and (
+            t["entry_time"] if hasattr(t["entry_time"], "tzinfo") and t["entry_time"].tzinfo else
+            t["entry_time"].replace(tzinfo=timezone.utc) if hasattr(t["entry_time"], "replace") else now
+        ) >= cutoff]
+        if recent:
+            peak = max(float(t.get("capital_after", 0) or 0) for t in recent)
+            if peak > 0 and balance > 0:
+                dd_pct = (peak - balance) / peak * 100
+                if dd_pct >= settings.M3_CB_HEAVY_DD_PCT:
+                    heavy_until = now + timedelta(hours=settings.M3_CB_HEAVY_BARS * 4)
+                    state.set_paper3_cb_heavy_until(heavy_until)
+    except Exception:
+        pass
 
 
 def warm_up_klines(client: BinanceClient, symbol: str, notify_func=None) -> bool:
@@ -144,7 +198,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
     last_hourly_status = None
     while True:
         try:
-            if state.get_paper_status() == "stopped" and state.get_paper2_status() == "stopped":
+            if state.get_paper_status() == "stopped" and state.get_paper2_status() == "stopped" and state.get_paper3_status() == "stopped":
                 time.sleep(settings.LOOP_INTERVAL_SEC)
                 continue
 
@@ -260,6 +314,11 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         api["set_last"](closed)
                         api["append_trade"](closed)
                         api["set_balance"](capital_after)
+                        if slot_id == 3:
+                            try:
+                                _update_m3_circuit_breaker(best_pnl, capital_after, closed)
+                            except Exception:
+                                pass
                         try:
                             from bot.paper_persistence import save_paper_state
                             save_paper_state()
@@ -270,26 +329,101 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                             notify_trade_closed(closed, source="loop", paper_slot=slot_id)
                         except Exception:
                             if notify_func:
-                                tag = "[PAPER]" if slot_id == 1 else "[PAPER2]"
-                                notify_func(f"{tag} 🔴 Đóng lệnh {side} | PnL: {best_pnl:.2f} USDT | Lý do: {reason}")
+                                if slot_id == 3:
+                                    tag = "[PAPER3]"
+                                elif slot_id == 2:
+                                    tag = "[PAPER2]"
+                                else:
+                                    tag = "[PAPER]"
+                                notify_func(f"{tag} Dong lenh {side} | PnL: {best_pnl:.2f} USDT | Ly do: {reason}")
                         continue
 
                 open_trade = api["get_open"]()
                 if not open_trade and st == "running" and in_4h_window:
+                    # Method 3: check circuit breaker before any entry
+                    if method == METHOD_3:
+                        now_utc = datetime.now(timezone.utc)
+                        heavy_until = state.get_paper3_cb_heavy_until()
+                        light_until = state.get_paper3_cb_light_until()
+                        if heavy_until and now_utc < heavy_until:
+                            continue
+                        if light_until and now_utc < light_until:
+                            continue
+
+                    # For Method 3, use extended indicators with ADX/EMA_TREND/swing
+                    if method == METHOD_3:
+                        try:
+                            df_4h_m3 = add_indicators_m3(
+                                df_4h_raw,
+                                ema_trend_len=getattr(settings, "M3_EMA_TREND_LEN", 50),
+                                swing_lookback=getattr(settings, "M3_SWING_LOOKBACK", 6),
+                            )
+                            row_m3 = _ensure_series(df_4h_m3.iloc[-2]) if len(df_4h_m3) >= 2 else None
+                        except Exception:
+                            row_m3 = None
+                    else:
+                        row_m3 = None
+
                     sig_long = long_entry(prev_row_closed, row_closed)
                     sig_short = short_entry(prev_row_closed, row_closed)
                     if sig_long or sig_short:
                         side = "LONG" if sig_long else "SHORT"
+
+                        # Method 3 entry filters
+                        m3_size_mult = 1.0
+                        if method == METHOD_3 and row_m3 is not None:
+                            # ADX zone filter
+                            adx_val = float(row_m3.get("ADX", 25.0) or 25.0)
+                            allow, adx_size_mult = m3_adx_zone(adx_val)
+                            if not allow:
+                                continue
+                            m3_size_mult = adx_size_mult
+
+                            # EMA trend filter (only when ADX > M3_EMA_TREND_ADX_ABOVE)
+                            ema_trend_adx_thresh = getattr(settings, "M3_EMA_TREND_ADX_ABOVE", 30.0)
+                            if adx_val > ema_trend_adx_thresh:
+                                ema_trend_val = float(row_m3.get("EMA_TREND", 0.0) or 0.0)
+                                close_val = float(row_m3.get("close", 0.0) or 0.0)
+                                if ema_trend_val > 0 and close_val > 0:
+                                    if side == "LONG" and close_val < ema_trend_val:
+                                        continue
+                                    if side == "SHORT" and close_val > ema_trend_val:
+                                        continue
+
+                            # Swing structure size adjustment
+                            disagree_size = getattr(settings, "M3_SWING_DISAGREE_SIZE", 0.6)
+                            higher_low = bool(row_m3.get("higher_low", False))
+                            lower_high = bool(row_m3.get("lower_high", False))
+                            if side == "LONG" and lower_high and not higher_low:
+                                m3_size_mult = min(m3_size_mult, disagree_size)
+                            elif side == "SHORT" and higher_low and not lower_high:
+                                m3_size_mult = min(m3_size_mult, disagree_size)
+
+                            # Streak multiplier
+                            streak_mult = m3_streak_multiplier(state.get_paper3_consecutive_losses())
+                            m3_size_mult = m3_size_mult * streak_mult
+
                         entry_px = float(df_1m["close"].iloc[-1]) if not df_1m.empty else float(row_closed["close"])
                         lev = api["get_lev"]()
                         wct = api["get_wct"]()
                         size, margin, notional = size_and_margin(balance, entry_px, leverage=lev, wallet_pct=wct)
+                        if method == METHOD_3 and m3_size_mult < 1.0:
+                            size = size * m3_size_mult
+                            margin = margin * m3_size_mult
+                            notional = notional * m3_size_mult
                         if size <= 0 or margin > balance:
                             continue
                         fee_in = linear_taker_fee_usdt(size, entry_px, float(settings.TAKER_FEE))
                         balance_after_fee = balance - fee_in
+
+                        # ATR multiplier (Method 3 uses dynamic multiplier)
                         atr_now = atr_1h_at_entry(df_1h, float(row_closed["ATR"]))
-                        trail_dist = atr_now * settings.ATR_MULTIPLIER
+                        entry_time_now = datetime.now(_tz_app)
+                        if method == METHOD_3:
+                            atr_mult_now = m3_atr_multiplier(entry_time_now)
+                        else:
+                            atr_mult_now = settings.ATR_MULTIPLIER
+                        trail_dist = atr_now * atr_mult_now
                         init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
 
                         def _f(v):
@@ -302,7 +436,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                         entry_4h_ts = df_4h.index[-2]
                         open_payload = {
                             "side": side,
-                            "entry_time": datetime.now(_tz_app),
+                            "entry_time": entry_time_now,
                             "entry_price": entry_px,
                             "size": size,
                             "margin": margin,
@@ -318,7 +452,9 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                             "trading_method": method,
                             "paper_slot": slot_id,
                         }
-                        # Chỉ phương pháp dùng %change (PP2) mới snapshot dải — PP1 không đụng pct_change
+                        if method == METHOD_3:
+                            open_payload["atr_multiplier_override"] = atr_mult_now
+                        # Chỉ phương pháp dùng %change (PP2) mới snapshot dải — PP1/PP3 không đụng pct_change
                         if uses_pct_change_bands(method):
                             bands_at_entry = build_pct_change_avg_bands_series(
                                 df_4h_raw, lookback_trades=lb_trades
@@ -340,8 +476,13 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                                 notify_trade_opened(ot, source="loop", paper_slot=slot_id)
                         except Exception:
                             if notify_func:
-                                tag = "[PAPER]" if slot_id == 1 else "[PAPER2]"
-                                notify_func(f"{tag} 🟢 Mở lệnh {side} @ {entry_px:.2f} | Size: {round(size, 3)} BTC")
+                                if slot_id == 3:
+                                    tag = "[PAPER3]"
+                                elif slot_id == 2:
+                                    tag = "[PAPER2]"
+                                else:
+                                    tag = "[PAPER]"
+                                notify_func(f"{tag} Mo lenh {side} @ {entry_px:.2f} | Size: {round(size, 3)} BTC")
 
             now = datetime.now(_tz_app)
             if status_func and last_status_min is not None:

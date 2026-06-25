@@ -10,6 +10,7 @@ STATE_FILE = ROOT / "paper_state.json"
 
 _restore_pending = False
 _restore_pending_paper2 = False
+_restore_pending_paper3 = False
 
 
 def _parse_dt(v):
@@ -62,6 +63,18 @@ def save_paper_state():
             "paper2_leverage": state.get_paper2_leverage(),
             "paper2_wallet_pct": state.get_paper2_wallet_pct(),
             "paper2_lookback_trades": state.get_paper2_lookback_trades(),
+            "paper3_initial_capital": state.get_paper3_initial_capital(),
+            "paper3_balance": state.get_paper3_balance(),
+            "paper3_started_at": state.get_paper3_started_at().isoformat() if state.get_paper3_started_at() else None,
+            "paper3_status": state.get_paper3_status(),
+            "paper3_open_trade": _serialize_for_save(state.get_paper3_open_trade()) if state.get_paper3_open_trade() else None,
+            "paper3_trades": _serialize_for_save(state.get_paper3_trades()),
+            "paper3_last_trade": _serialize_for_save(state.get_paper3_last_trade()) if state.get_paper3_last_trade() else None,
+            "paper3_leverage": state.get_paper3_leverage(),
+            "paper3_wallet_pct": state.get_paper3_wallet_pct(),
+            "paper3_consecutive_losses": state.get_paper3_consecutive_losses(),
+            "paper3_cb_light_until": state.get_paper3_cb_light_until().isoformat() if state.get_paper3_cb_light_until() else None,
+            "paper3_cb_heavy_until": state.get_paper3_cb_heavy_until().isoformat() if state.get_paper3_cb_heavy_until() else None,
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=0)
@@ -157,7 +170,52 @@ def load_paper_state():
                 open2["last_sl_check"] = _parse_dt(open2["last_sl_check"])
             state.set_paper2_open_trade(open2)
             _restore_pending_paper2 = True
-        if _restore_pending or _restore_pending_paper2:
+        if data.get("paper3_initial_capital") is not None:
+            state.set_paper3_initial_capital(float(data.get("paper3_initial_capital") or 0))
+        if data.get("paper3_balance") is not None:
+            state.set_paper3_balance(float(data.get("paper3_balance") or 0))
+        started3 = _parse_dt(data.get("paper3_started_at"))
+        state.set_paper3_started_at(started3)
+        state.set_paper3_status(str(data.get("paper3_status") or "stopped"))
+        trades3_raw = data.get("paper3_trades") or []
+        trades3 = []
+        for t in trades3_raw:
+            tt = dict(t)
+            tt["entry_time"] = _parse_dt(t.get("entry_time"))
+            tt["exit_time"] = _parse_dt(t.get("exit_time"))
+            trades3.append(tt)
+        state.restore_paper3_trades(trades3)
+        lev3 = data.get("paper3_leverage")
+        if lev3 is not None:
+            state.set_paper3_leverage(float(lev3))
+        wct3 = data.get("paper3_wallet_pct")
+        if wct3 is not None:
+            state.set_paper3_wallet_pct(float(wct3))
+        try:
+            state.set_paper3_consecutive_losses(int(data.get("paper3_consecutive_losses") or 0))
+        except (TypeError, ValueError):
+            pass
+        cl_until = _parse_dt(data.get("paper3_cb_light_until"))
+        if cl_until:
+            state.set_paper3_cb_light_until(cl_until)
+        ch_until = _parse_dt(data.get("paper3_cb_heavy_until"))
+        if ch_until:
+            state.set_paper3_cb_heavy_until(ch_until)
+        last3 = data.get("paper3_last_trade")
+        if last3:
+            last3 = dict(last3)
+            last3["entry_time"] = _parse_dt(last3.get("entry_time"))
+            last3["exit_time"] = _parse_dt(last3.get("exit_time"))
+            state.set_paper3_last_trade(last3)
+        open3 = data.get("paper3_open_trade")
+        if open3:
+            open3 = dict(open3)
+            open3["entry_time"] = _parse_dt(open3.get("entry_time"))
+            if open3.get("last_sl_check"):
+                open3["last_sl_check"] = _parse_dt(open3["last_sl_check"])
+            state.set_paper3_open_trade(open3)
+            _restore_pending_paper3 = True
+        if _restore_pending or _restore_pending_paper2 or _restore_pending_paper3:
             return True
         return False
     except Exception:
@@ -169,9 +227,10 @@ def get_restore_pending():
 
 
 def clear_restore_pending():
-    global _restore_pending, _restore_pending_paper2
+    global _restore_pending, _restore_pending_paper2, _restore_pending_paper3
     _restore_pending = False
     _restore_pending_paper2 = False
+    _restore_pending_paper3 = False
 
 
 def clear_restore_pending_paper():
@@ -186,3 +245,12 @@ def clear_restore_pending_paper2():
 
 def get_restore_pending_paper2():
     return _restore_pending_paper2
+
+
+def clear_restore_pending_paper3():
+    global _restore_pending_paper3
+    _restore_pending_paper3 = False
+
+
+def get_restore_pending_paper3():
+    return _restore_pending_paper3

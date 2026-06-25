@@ -68,3 +68,31 @@ def short_exit_early(prev, row):
     cross_above = prev["RSI"] <= prev["EMA_RSI"] and row["RSI"] > row["EMA_RSI"]
     rsi_rise = row["RSI"] > settings.RSI_SHORT_CUT
     return cross_above or rsi_rise
+
+
+def long_early_exit_strong_b(df_4h: "pd.DataFrame", i: int, confirm_bars: int = 2) -> bool:
+    """Cach B - tang manh LONG: RSI duoi nguong cung VA dang giam lien tiep confirm_bars nen."""
+    if i < confirm_bars or i >= len(df_4h):
+        return False
+    try:
+        window = df_4h["RSI"].iloc[i - confirm_bars: i + 1]
+        if not bool((window < settings.RSI_LONG_CUT).all()):
+            return False
+        diffs = window.diff().iloc[1:]
+        return bool((diffs <= 0).all())
+    except Exception:
+        return False
+
+
+def short_early_exit_strong_b(df_4h: "pd.DataFrame", i: int, confirm_bars: int = 2) -> bool:
+    """Cach B - tang manh SHORT: RSI tren nguong cung VA dang tang lien tiep confirm_bars nen."""
+    if i < confirm_bars or i >= len(df_4h):
+        return False
+    try:
+        window = df_4h["RSI"].iloc[i - confirm_bars: i + 1]
+        if not bool((window > settings.RSI_SHORT_CUT).all()):
+            return False
+        diffs = window.diff().iloc[1:]
+        return bool((diffs >= 0).all())
+    except Exception:
+        return False
