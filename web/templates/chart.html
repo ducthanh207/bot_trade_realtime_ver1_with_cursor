@@ -43,6 +43,19 @@
       <label><input type="checkbox" id="togEmaRsi" checked> E↗RSI</label>
       <label><input type="checkbox" id="togWmaRsi" checked> W↗RSI</label>
       <label><input type="checkbox" id="togAtr"> ATR</label>
+      <label><input type="checkbox" id="togMarkersP1" checked> P1</label>
+      <label><input type="checkbox" id="togMarkersP2" checked> P2</label>
+      <label><input type="checkbox" id="togMarkersP3" checked> P3</label>
+      <hr class="sidebar-sep">
+      <div class="chart-ind-params">
+        <span class="ind-param-title">Chu kỳ</span>
+        <label class="ind-param-label">EMA<input type="number" id="indEma" value="20" min="2" max="500" step="1"></label>
+        <label class="ind-param-label">RSI<input type="number" id="indRsi" value="14" min="2" max="200" step="1"></label>
+        <label class="ind-param-label">E&#x2197;RSI<input type="number" id="indEmaRsi" value="9" min="2" max="200" step="1"></label>
+        <label class="ind-param-label">W&#x2197;RSI<input type="number" id="indWmaRsi" value="45" min="2" max="200" step="1"></label>
+        <label class="ind-param-label">ATR<input type="number" id="indAtr" value="14" min="2" max="200" step="1"></label>
+        <button type="button" id="btnIndApply" class="ind-apply-btn">&#193;p d&#7909;ng</button>
+      </div>
     </aside>
     <div class="chart-tv-main">
       <div class="chart-tv-price-wrap">

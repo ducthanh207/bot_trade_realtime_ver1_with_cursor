@@ -20,28 +20,26 @@
     }
   }
 
-  let lastOrders = [];
-  let lastOrdersJson = "";
-  function fetchOrdersForMarkers() {
-    fetch("/api/orders")
-      .then(function (r) {
-        return r.json();
-      })
+  var lastOrdersBySlot = { 1: [], 2: [], 3: [] };
+  var lastOrdersJsonBySlot = { 1: "", 2: "", 3: "" };
+  function fetchOrdersForSlot(slot) {
+    fetch("/api/orders?slot=" + slot)
+      .then(function (r) { return r.json(); })
       .then(function (data) {
         var orders = data.orders || [];
         var j = "";
-        try {
-          j = JSON.stringify(orders);
-        } catch (e) {
-          j = String(Math.random());
-        }
-        if (j === lastOrdersJson) return;
-        lastOrdersJson = j;
-        lastOrders = orders;
+        try { j = JSON.stringify(orders); } catch (e) { j = String(Math.random()); }
+        if (j === lastOrdersJsonBySlot[slot]) return;
+        lastOrdersJsonBySlot[slot] = j;
+        lastOrdersBySlot[slot] = orders;
         if (typeof applyMarkersTv === "function") applyMarkersTv();
       })
       .catch(function () {});
   }
+  function fetchOrdersForMarkers() {
+    fetchOrdersForSlot(1); fetchOrdersForSlot(2); fetchOrdersForSlot(3);
+  }
+  var lastOrders = [];
 
   const GMT7_OFFSET_SEC = 7 * 3600;
   const isBrowserUTC = (function () {
@@ -205,25 +203,13 @@
         if (playbackIndex !== null) return;
         runWithTimeSyncSuppressed(function () {
           try {
-            chartPrice.timeScale().applyOptions({
-              rightOffset: ro,
-              barSpacing: 6,
-              shiftVisibleRangeOnNewBar: false,
-              rightBarStaysOnScroll: false,
-            });
-            if (chartIndicator) {
-              chartIndicator.timeScale().applyOptions({
-                rightOffset: ro,
-                barSpacing: 6,
-                shiftVisibleRangeOnNewBar: false,
-                rightBarStaysOnScroll: false,
-              });
-            }
+            var safeOpts = { shiftVisibleRangeOnNewBar: false, rightBarStaysOnScroll: false };
+            chartPrice.timeScale().applyOptions(safeOpts);
+            if (chartIndicator) chartIndicator.timeScale().applyOptions(safeOpts);
             if (!snap) return;
-
             if (snap.logicalFrom != null && snap.logicalTo != null) {
-              var lf = Math.max(0, Math.min(n - 1, snap.logicalFrom));
-              var lt = Math.max(0, Math.min(n - 1, snap.logicalTo));
+              var lf = snap.logicalFrom;
+              var lt = snap.logicalTo;
               if (lf < lt) {
                 chartPrice.timeScale().setVisibleLogicalRange({ from: lf, to: lt });
                 if (chartIndicator) chartIndicator.timeScale().setVisibleLogicalRange({ from: lf, to: lt });
@@ -476,42 +462,34 @@
     }
   }
 
-  function buildMarkers(orders) {
-    const markers = [];
-    (orders || []).forEach(function (o) {
-      const tEntry = o.entry_time ? toChartTime(o.entry_time) : null;
-      if (tEntry)
-        markers.push({
-          time: tEntry,
-          position: o.side === "LONG" ? "belowBar" : "aboveBar",
-          color: o.side === "LONG" ? "#26a69a" : "#ef5350",
-          shape: "arrowUp",
-          text: "Vào",
-        });
-      const tExit = o.exit_time ? toChartTime(o.exit_time) : null;
-      if (tExit)
-        markers.push({
-          time: tExit,
-          position: o.side === "LONG" ? "aboveBar" : "belowBar",
-          color: "#787b86",
-          shape: "arrowDown",
-          text: "Ra",
-        });
+  var SLOT_STYLES = {
+    1: { entryColor: "#26a69a", exitColor: "#ef5350", entryShape: "arrowUp", exitShape: "arrowDown", label: "P1" },
+    2: { entryColor: "#00bcd4", exitColor: "#ff9800", entryShape: "circle", exitShape: "circle", label: "P2" },
+    3: { entryColor: "#ffeb3b", exitColor: "#9c27b0", entryShape: "square", exitShape: "square", label: "P3" },
+  };
+  function isSlotMarkersVisible(slot) {
+    var el = document.getElementById("togMarkersP" + slot);
+    return el ? el.checked : true;
+  }
+  function buildMarkersAllSlots() {
+    var markers = [];
+    [1, 2, 3].forEach(function (slot) {
+      if (!isSlotMarkersVisible(slot)) return;
+      var st = SLOT_STYLES[slot];
+      var orders = lastOrdersBySlot[slot] || [];
+      orders.forEach(function (o) {
+        var tEntry = o.entry_time ? toChartTime(o.entry_time) : null;
+        if (tEntry) markers.push({ time: tEntry, position: o.side === "LONG" ? "belowBar" : "aboveBar", color: o.side === "LONG" ? st.entryColor : st.exitColor, shape: st.entryShape, text: st.label + " In", size: 1 });
+        var tExit = o.exit_time ? toChartTime(o.exit_time) : null;
+        if (tExit) markers.push({ time: tExit, position: o.side === "LONG" ? "aboveBar" : "belowBar", color: st.exitColor, shape: st.exitShape, text: st.label + " Out", size: 1 });
+      });
     });
+    markers.sort(function (a, b) { return a.time - b.time; });
     return markers;
   }
-
   function applyMarkersTv() {
-    if (!seriesCandle || !lastOrders.length) {
-      if (seriesCandle)
-        try {
-          seriesCandle.setMarkers([]);
-        } catch (e) {}
-      return;
-    }
-    try {
-      seriesCandle.setMarkers(buildMarkers(lastOrders));
-    } catch (e) {}
+    if (!seriesCandle) return;
+    try { seriesCandle.setMarkers(buildMarkersAllSlots()); } catch (e) {}
   }
 
   function slicePctChangePayload(payload, n) {
@@ -661,7 +639,7 @@
 
     if (seriesCandle) {
       seriesCandle.setData(candleData);
-      seriesCandle.setMarkers(buildMarkers(lastOrders));
+      seriesCandle.setMarkers(buildMarkersAllSlots());
     }
     if (seriesVolume && volumeData.length) seriesVolume.setData(volumeData);
     if (seriesEma && ind.EMA && ind.EMA.length) {
@@ -806,11 +784,10 @@
     }
 
     var lb = getLookbackTrades();
+    function getIndParam(id, def) { var el = document.getElementById(id); if (!el) return def; var v = parseInt(el.value, 10); return Number.isFinite(v) && v >= 2 ? v : def; }
+    var qIndParams = "&ema_period=" + getIndParam("indEma", 20) + "&rsi_period=" + getIndParam("indRsi", 14) + "&ema_rsi_period=" + getIndParam("indEmaRsi", 9) + "&wma_rsi_period=" + getIndParam("indWmaRsi", 45) + "&atr_period=" + getIndParam("indAtr", 14);
     fetch(
-      "/api/klines?interval=" +
-        encodeURIComponent(interval) +
-        "&limit=500&lookback_trades=" +
-        encodeURIComponent(String(lb))
+      "/api/klines?interval=" + encodeURIComponent(interval) + "&limit=500&lookback_trades=" + encodeURIComponent(String(lb)) + qIndParams
     )
       .then(function (r) {
         return r.json();
@@ -1117,21 +1094,7 @@
     const hi = document.getElementById("chartIndicatorTv").clientHeight;
     if (chartPrice) chartPrice.applyOptions({ width: w, height: h });
     if (chartIndicator) chartIndicator.applyOptions({ width: wi, height: hi });
-    if (playbackIndex === null && chartPrice) {
-      var ro = computeRightOffsetBars();
-      runWithTimeSyncSuppressed(function () {
-        try {
-          var tsR = {
-            rightOffset: ro,
-            barSpacing: 6,
-            shiftVisibleRangeOnNewBar: false,
-            rightBarStaysOnScroll: false,
-          };
-          chartPrice.timeScale().applyOptions(tsR);
-          if (chartIndicator) chartIndicator.timeScale().applyOptions(tsR);
-        } catch (e) {}
-      });
-    }
+    // Do NOT reset barSpacing/rightOffset on resize — that overrides user zoom/pan.
   }
 
   window.addEventListener("resize", function () {
@@ -1206,6 +1169,10 @@
     });
   }
 
+  var btnIndApply = document.getElementById("btnIndApply");
+  if (btnIndApply) { btnIndApply.addEventListener("click", function () { playbackIndex = null; stopPlaybackTimer(); fetchKlinesTv(false); }); }
+  ["indEma","indRsi","indEmaRsi","indWmaRsi","indAtr"].forEach(function(id) { var el = document.getElementById(id); if (el) el.addEventListener("keydown", function(ev) { if (ev.key === "Enter") { ev.preventDefault(); fetchKlinesTv(false); } }); });
+  ["togMarkersP1","togMarkersP2","togMarkersP3"].forEach(function(id) { var el = document.getElementById(id); if (el) el.addEventListener("change", function() { applyMarkersTv(); }); });
   window.fetchKlinesTv = fetchKlinesTv;
   window.applyMarkersTv = applyMarkersTv;
 

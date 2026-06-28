@@ -5,18 +5,21 @@ import pandas as pd
 import pandas_ta as ta
 
 
-def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Thêm cột RSI, EMA_RSI (WMA 9), WMA_RSI (45), ATR, EMA (trên close) vào df.
-    Trả về bản copy đã dropna.
-    """
+def add_indicators(
+    df: pd.DataFrame,
+    rsi_period: int = 14,
+    ema_period: int = 20,
+    ema_rsi_period: int = 9,
+    wma_rsi_period: int = 45,
+    atr_period: int = 14,
+) -> pd.DataFrame:
     out = df.copy()
-    out["RSI"] = ta.rsi(out["close"], length=14)
-    out["EMA_RSI"] = ta.wma(out["RSI"], length=9)
-    out["WMA_RSI"] = ta.wma(out["RSI"], length=45)
-    out["ATR"] = ta.atr(out["high"], out["low"], out["close"], length=14)
-    out["EMA"] = ta.ema(out["close"], length=20)
-    out["WMA"] = ta.wma(out["close"], length=20)
+    out["RSI"] = ta.rsi(out["close"], length=rsi_period)
+    out["EMA_RSI"] = ta.wma(out["RSI"], length=ema_rsi_period)
+    out["WMA_RSI"] = ta.wma(out["RSI"], length=wma_rsi_period)
+    out["ATR"] = ta.atr(out["high"], out["low"], out["close"], length=atr_period)
+    out["EMA"] = ta.ema(out["close"], length=ema_period)
+    out["WMA"] = ta.wma(out["close"], length=ema_period)
     return out.dropna()
 
 
