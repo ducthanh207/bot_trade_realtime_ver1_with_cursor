@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Paper trade 2 – ATR Strategy{% endblock %}
+{% block content %}
+<section class="paper-layout" role="main">
+  <header class="overview">
+    <label>Vốn (USDT)</label>
+    <input type="number" id="initial_capital" value="1000" min="1" step="1">
+    <button type="button" class="btn-rules" id="btnSetInitialCapital" title="Đổi vốn mốc: scale size/margin/profit mọi lệnh theo tỷ lệ vốn mới/cũ (như backtest lại sizing). Giá vào/ra giữ nguyên.">Lưu mốc vốn</button>
+    <button class="start" id="btnStart">Kích hoạt</button>
+    <button class="pause" id="btnPause">Tạm dừng</button>
+    <button class="stop" id="btnStop">Dừng</button>
+    <button type="button" class="btn-clear" id="btnClearHistory">Xóa toàn bộ</button>
+    <span class="status-badge status-stopped" id="statusBadge">stopped</span>
+    <span class="stat" id="statStarted">Bắt đầu: —</span>
+    <span class="stat" id="statTradesDone">Lệnh đã hoàn thành: 0</span>
+    <span class="stat" id="statOrdersOpen">Lệnh_Open: 0</span>
+    <span class="stat" id="statWinrate">Winrate: 0%</span>
+    <span class="stat" id="statPnl" title="Tổng profit đã đóng; mỗi profit đã trừ phí thoát. Đừng cộng trừ với Tổng phí kiểu (mốc + PNL − phí) — sẽ lệch vì phí thoát đã nằm trong PNL.">PNL: 0.00</span>
+    <span class="stat" id="statPnlOpen">PNL_Open: 0.00</span>
+    <span class="stat" id="statBalance" title="Số dư ví (đã trừ phí vào lệnh đang mở nếu có). Capital_Open = Vốn + PNL_Open. Khi có lệnh ẩn, có thể dùng số replay trên thanh.">Vốn: 0.00</span>
+    <span class="stat" id="statTotalFees" title="Tổng phí vào + phí thoát mọi lệnh đóng + phí vào lệnh mở. Khi ẩn lệnh: chỉ tính lệnh không ẩn (đồng bộ Vốn replay).">Tổng phí: 0.00</span>
+    <span class="stat" id="statCapitalOpen">Capital_Open: 0.00</span>
+    <span class="refresh-msg" id="refreshMsg">Cập nhật 5s</span>
+    <div class="overview-rules">
+      <label>Đòn bẩy</label>
+      <input type="number" id="inputLeverage" min="1" max="125" step="1" value="20" title="1–125">
+      <label>% vốn vào lệnh</label>
+      <input type="number" id="inputWalletPct" min="1" max="100" step="0.5" value="30" title="1–100%">
+      <button type="button" class="btn-rules" id="btnCapitalRules">Cập nhật quy tắc vốn</button>
+    </div>
+    <div class="overview-rules overview-strategy-paper2">
+      <label for="inputPctLookback" title="Lookback: số lệnh đã đóng dùng để tính %change (1–200). Không phải số nến.">%change — lookback (số lệnh)</label>
+      <input type="number" id="inputPctLookback" min="1" max="200" step="1" value="15" inputmode="numeric" aria-label="Lookback số lệnh cho %change">
+      <button type="button" class="btn-rules" id="btnSaveStrategy">Lưu chiến lược</button>
+    </div>
+  </header>
+  <aside class="orders-panel">
+    <div class="paper-charts-row" aria-label="Biểu đồ paper 2">
+      <div class="paper-chart-box">
+        <div class="paper-chart-title">Vốn theo thời gian</div>
+        <div class="paper-chart-scroll" id="paperChartCapitalScroll">
+          <canvas id="paperChartCapital" width="400" height="150"></canvas>
+        </div>
+      </div>
+      <div class="paper-chart-box">
+        <div class="paper-chart-title">Profit từng lệnh (theo thứ tự lệnh)</div>
+        <div class="paper-chart-scroll" id="paperChartProfitScroll">
+          <canvas id="paperChartProfit" width="400" height="150"></canvas>
+        </div>
+      </div>
+    </div>
+    <h3 class="orders-panel-title">
+      <span class="orders-title-text">Lệnh (mới nhất trên cùng)</span>
+      <span class="orders-title-actions">
+        <button type="button" class="btn-save-hidden" id="btnSaveHidden" title="Lưu danh sách lệnh ẩn lên máy chủ (điện thoại / trình khác đồng bộ). Bấm 👁 chỉ đổi tạm trên máy này cho đến khi Lưu.">Lưu</button>
+        <button type="button" class="btn-export" id="btnExportCsv">Xuất CSV</button>
+      </span>
+    </h3>
+    <div class="orders-table-wrap" id="paperOrdersTableWrap">
+      <table class="orders-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Symbol</th><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>Profit</th><th>Phí</th><th>% PnL</th><th>%PnL vốn</th><th>Cap After</th><th>Reason</th><th>Thao tác</th><th class="th-hide">Ẩn</th>
+          </tr>
+        </thead>
+        <tbody id="ordersBody"></tbody>
+      </table>
+    </div>
+  </aside>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+  window.PAPER_UI = { slot: 2, prefix: "paper2", apiBase: "/api/paper2" };
+</script>
+<script src="{{ url_for('static', filename='js/paper_charts.js') }}"></script>
+<script src="{{ url_for('static', filename='js/paper.js') }}"></script>
+{% endblock %}

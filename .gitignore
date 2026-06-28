@@ -1,0 +1,13 @@
+.env
+paper_state.json
+__pycache__/
+*.py[cod]
+*.log
+logs/
+*.db
+storage/*.db
+.venv/
+venv/
+*.egg-info/
+dist/
+build/

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Paper Trade – ATR Strategy{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <div class="layout-root">
+    <nav class="top-nav" role="navigation" aria-label="Menu chính">
+      <span class="nav-paper-group" aria-label="Paper trade">
+        <a href="{{ url_for('page_paper') }}" class="nav-link {% if nav_active == 'paper' %}active{% endif %}">Paper trade</a>
+        <a href="{{ url_for('page_paper2') }}" class="nav-link {% if nav_active == 'paper2' %}active{% endif %}">Paper trade 2</a>
+        <a href="{{ url_for('page_paper3') }}" class="nav-link {% if nav_active == 'paper3' %}active{% endif %}">Paper trade 3</a>
+      </span>
+      <a href="{{ url_for('page_chart') }}" class="nav-link {% if nav_active == 'chart' %}active{% endif %}">Biểu đồ</a>
+      <a href="{{ url_for('page_real') }}" class="nav-link {% if nav_active == 'real' %}active{% endif %}">Trade thật</a>
+    </nav>
+    {% block content %}{% endblock %}
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

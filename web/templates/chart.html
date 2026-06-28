@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Biểu đồ – ATR Strategy{% endblock %}
+{% block head_extra %}
+<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+{% endblock %}
+{% block content %}
+<section class="chart-tv-root" role="main">
+  <div class="chart-tv-toolbar">
+    <label>Khung</label>
+    <select id="timeframeTv">
+      <option value="1m">1 phút</option>
+      <option value="5m" selected>5 phút</option>
+      <option value="15m">15 phút</option>
+      <option value="1h">1 giờ</option>
+      <option value="4h">4 giờ</option>
+      <option value="1d">1 ngày</option>
+      <option value="3d">3 ngày</option>
+    </select>
+    <label class="chart-lookback-label" for="lookbackPctTv" title="Số lệnh đã đóng dùng để tính %change (1–200)">Lookback</label>
+    <input type="number" id="lookbackPctTv" class="chart-lookback-input" min="1" max="200" value="15" step="1" inputmode="numeric" aria-label="Lookback trades cho chỉ báo %change" />
+    <span class="stat" id="chartSymbolTitle" style="color:#d1d4dc;">—</span>
+    <span class="stat chart-pct-stat" id="chartPctChangeStat" title="%change: nửa độ rộng dải ±%"></span>
+    <button type="button" id="btnPlaybackLive" class="primary" title="Realtime từ API">Live</button>
+    <button type="button" id="btnPlaybackStep" title="Thêm 1 nến (playback)">+1 nến</button>
+    <button type="button" id="btnPlaybackPlay" title="Tự chạy từng nến">▶ Play</button>
+    <button type="button" id="btnPlaybackPause" title="Dừng auto">⏸ Pause</button>
+    <button type="button" id="btnChartSave" class="chart-save-btn" title="Lưu khung, lookback, layer và zoom vào trình duyệt (máy này)">Lưu</button>
+    <span class="playback-hint">Double-click nến để playback · Hai khung đồng bộ trục thời gian</span>
+  </div>
+  <div class="chart-legend-ohlc" id="chartLegendOhlc" aria-live="polite">
+    <span class="chart-legend-item"><span class="chart-legend-k">O</span> <span id="legO">—</span></span>
+    <span class="chart-legend-item"><span class="chart-legend-k">H</span> <span id="legH">—</span></span>
+    <span class="chart-legend-item"><span class="chart-legend-k">L</span> <span id="legL">—</span></span>
+    <span class="chart-legend-item"><span class="chart-legend-k">C</span> <span id="legC">—</span></span>
+    <span class="chart-legend-item chart-legend-delta" id="legDelta">—</span>
+  </div>
+  <div class="chart-tv-body">
+    <aside class="chart-tv-sidebar" title="Bật/tắt chỉ báo">
+      <label><input type="checkbox" id="togVolume" checked> Vol</label>
+      <label><input type="checkbox" id="togEma" checked> EMA</label>
+      <label><input type="checkbox" id="togPctChange" checked> %change</label>
+      <label><input type="checkbox" id="togRsi" checked> RSI</label>
+      <label><input type="checkbox" id="togEmaRsi" checked> E↗RSI</label>
+      <label><input type="checkbox" id="togWmaRsi" checked> W↗RSI</label>
+      <label><input type="checkbox" id="togAtr"> ATR</label>
+      <label><input type="checkbox" id="togMarkersP1" checked> P1</label>
+      <label><input type="checkbox" id="togMarkersP2" checked> P2</label>
+      <label><input type="checkbox" id="togMarkersP3" checked> P3</label>
+      <hr class="sidebar-sep">
+      <div class="chart-ind-params">
+        <span class="ind-param-title">Chu kỳ</span>
+        <label class="ind-param-label">EMA<input type="number" id="indEma" value="20" min="2" max="500" step="1"></label>
+        <label class="ind-param-label">RSI<input type="number" id="indRsi" value="14" min="2" max="200" step="1"></label>
+        <label class="ind-param-label">E&#x2197;RSI<input type="number" id="indEmaRsi" value="9" min="2" max="200" step="1"></label>
+        <label class="ind-param-label">W&#x2197;RSI<input type="number" id="indWmaRsi" value="45" min="2" max="200" step="1"></label>
+        <label class="ind-param-label">ATR<input type="number" id="indAtr" value="14" min="2" max="200" step="1"></label>
+        <button type="button" id="btnIndApply" class="ind-apply-btn">&#193;p d&#7909;ng</button>
+      </div>
+    </aside>
+    <div class="chart-tv-main">
+      <div class="chart-tv-price-wrap">
+        <div class="chart-title" id="chartPriceTitleTv">Giá + Volume (Binance Futures)</div>
+        <div class="chart-tv-pane chart-tv-pane--price" id="chartPriceTv"></div>
+      </div>
+      <div class="chart-tv-ind-wrap">
+            <div class="chart-title">RSI · EMA_RSI · WMA_RSI (0–100)</div>
+        <div class="chart-tv-pane chart-tv-pane--ind" id="chartIndicatorTv"></div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/chart.js') }}"></script>
+{% endblock %}
