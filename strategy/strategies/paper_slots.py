@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4
 
 SLOT_METHOD = {
     1: METHOD_1,
     2: METHOD_2,
     3: METHOD_3,
+    4: METHOD_4,
 }
 
 

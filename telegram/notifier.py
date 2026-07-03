@@ -239,7 +239,7 @@ def notify_trade_closed(closed: dict, source: str = "loop", paper_slot: int = No
             slot = int(paper_slot if paper_slot is not None else closed.get("paper_slot") or 1)
         except (TypeError, ValueError):
             slot = 1
-        tag = "[PAPER]" if slot == 1 else "[PAPER2]"
+        tag = "[PAPER]" if slot == 1 else f"[PAPER{slot}]"
         side = str(closed.get("side", "")).upper()
         profit = float(closed.get("profit", 0))
         cap_before = float(closed.get("capital_before") or 0)
@@ -250,7 +250,11 @@ def notify_trade_closed(closed: dict, source: str = "loop", paper_slot: int = No
         leverage = getattr(settings, "LEVERAGE", 20.0)
         try:
             from bot import state
-            if slot == 2:
+            if slot == 4:
+                leverage = state.get_paper4_leverage() or leverage
+            elif slot == 3:
+                leverage = state.get_paper3_leverage() or leverage
+            elif slot == 2:
                 leverage = state.get_paper2_leverage() or leverage
             else:
                 leverage = state.get_paper_leverage() or leverage
@@ -300,7 +304,7 @@ def notify_trade_opened(open_trade: dict, source: str = "loop", paper_slot: int 
             slot = int(paper_slot if paper_slot is not None else open_trade.get("paper_slot") or 1)
         except (TypeError, ValueError):
             slot = 1
-        tag = "[PAPER]" if slot == 1 else "[PAPER2]"
+        tag = "[PAPER]" if slot == 1 else f"[PAPER{slot}]"
         side = str(open_trade.get("side", "")).upper()
         entry_px = float(open_trade.get("entry_price") or 0)
         size = float(open_trade.get("size") or 0)

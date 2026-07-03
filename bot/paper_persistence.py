@@ -42,6 +42,14 @@ def save_paper_state():
         started = state.get_paper_started_at()
         open2 = state.get_paper2_open_trade()
         started2 = state.get_paper2_started_at()
+        open3 = state.get_paper3_open_trade()
+        started3 = state.get_paper3_started_at()
+        cb_light = state.get_paper3_cb_light_until()
+        cb_heavy = state.get_paper3_cb_heavy_until()
+        open4 = state.get_paper4_open_trade()
+        started4 = state.get_paper4_started_at()
+        cb_light4 = state.get_paper4_cb_light_until()
+        cb_heavy4 = state.get_paper4_cb_heavy_until()
         data = {
             "paper_initial_capital": state.get_paper_initial_capital(),
             "paper_balance": state.get_paper_balance(),
@@ -64,6 +72,32 @@ def save_paper_state():
             "paper2_wallet_pct": state.get_paper2_wallet_pct(),
             "paper2_lookback_trades": state.get_paper2_lookback_trades(),
             "paper2_hidden_trade_keys": state.get_paper2_hidden_trade_keys(),
+            "paper3_initial_capital": state.get_paper3_initial_capital(),
+            "paper3_balance": state.get_paper3_balance(),
+            "paper3_started_at": started3.isoformat() if started3 else None,
+            "paper3_status": state.get_paper3_status(),
+            "paper3_open_trade": _serialize_for_save(open3) if open3 else None,
+            "paper3_trades": _serialize_for_save(state.get_paper3_trades()),
+            "paper3_last_trade": _serialize_for_save(state.get_paper3_last_trade()) if state.get_paper3_last_trade() else None,
+            "paper3_leverage": state.get_paper3_leverage(),
+            "paper3_wallet_pct": state.get_paper3_wallet_pct(),
+            "paper3_consecutive_losses": state.get_paper3_consecutive_losses(),
+            "paper3_cb_light_until": cb_light.isoformat() if hasattr(cb_light, "isoformat") else cb_light,
+            "paper3_cb_heavy_until": cb_heavy.isoformat() if hasattr(cb_heavy, "isoformat") else cb_heavy,
+            "paper3_hidden_trade_keys": state.get_paper3_hidden_trade_keys(),
+            "paper4_initial_capital": state.get_paper4_initial_capital(),
+            "paper4_balance": state.get_paper4_balance(),
+            "paper4_started_at": started4.isoformat() if started4 else None,
+            "paper4_status": state.get_paper4_status(),
+            "paper4_open_trade": _serialize_for_save(open4) if open4 else None,
+            "paper4_trades": _serialize_for_save(state.get_paper4_trades()),
+            "paper4_last_trade": _serialize_for_save(state.get_paper4_last_trade()) if state.get_paper4_last_trade() else None,
+            "paper4_leverage": state.get_paper4_leverage(),
+            "paper4_wallet_pct": state.get_paper4_wallet_pct(),
+            "paper4_consecutive_losses": state.get_paper4_consecutive_losses(),
+            "paper4_cb_light_until": cb_light4.isoformat() if hasattr(cb_light4, "isoformat") else cb_light4,
+            "paper4_cb_heavy_until": cb_heavy4.isoformat() if hasattr(cb_heavy4, "isoformat") else cb_heavy4,
+            "paper4_hidden_trade_keys": state.get_paper4_hidden_trade_keys(),
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=0)
@@ -175,6 +209,92 @@ def load_paper_state():
                 open2["last_sl_check"] = _parse_dt(open2["last_sl_check"])
             state.set_paper2_open_trade(open2)
             _restore_pending_paper2 = True
+        # ---------- Paper 3 ----------
+        if data.get("paper3_initial_capital") is not None:
+            state.set_paper3_initial_capital(float(data.get("paper3_initial_capital") or 0))
+        if data.get("paper3_balance") is not None:
+            state.set_paper3_balance(float(data.get("paper3_balance") or 0))
+        state.set_paper3_started_at(_parse_dt(data.get("paper3_started_at")))
+        state.set_paper3_status(str(data.get("paper3_status") or "stopped"))
+        trades3 = []
+        for t in (data.get("paper3_trades") or []):
+            tt = dict(t)
+            tt["entry_time"] = _parse_dt(t.get("entry_time"))
+            tt["exit_time"] = _parse_dt(t.get("exit_time"))
+            trades3.append(tt)
+        state.restore_paper3_trades(trades3)
+        lev3 = data.get("paper3_leverage")
+        if lev3 is not None:
+            state.set_paper3_leverage(float(lev3))
+        wct3 = data.get("paper3_wallet_pct")
+        if wct3 is not None:
+            state.set_paper3_wallet_pct(float(wct3))
+        last3 = data.get("paper3_last_trade")
+        if last3:
+            last3 = dict(last3)
+            last3["entry_time"] = _parse_dt(last3.get("entry_time"))
+            last3["exit_time"] = _parse_dt(last3.get("exit_time"))
+            state.set_paper3_last_trade(last3)
+        open3 = data.get("paper3_open_trade")
+        if open3:
+            open3 = dict(open3)
+            open3["entry_time"] = _parse_dt(open3.get("entry_time"))
+            if open3.get("last_sl_check"):
+                open3["last_sl_check"] = _parse_dt(open3["last_sl_check"])
+            state.set_paper3_open_trade(open3)
+        losses3 = data.get("paper3_consecutive_losses")
+        if losses3 is not None:
+            try:
+                state.set_paper3_consecutive_losses(int(losses3))
+            except (TypeError, ValueError):
+                pass
+        state.set_paper3_cb_light_until(_parse_dt(data.get("paper3_cb_light_until")))
+        state.set_paper3_cb_heavy_until(_parse_dt(data.get("paper3_cb_heavy_until")))
+        hk3 = data.get("paper3_hidden_trade_keys")
+        state.set_paper3_hidden_trade_keys(hk3 if isinstance(hk3, list) else [])
+        # ---------- Paper 4 ----------
+        if data.get("paper4_initial_capital") is not None:
+            state.set_paper4_initial_capital(float(data.get("paper4_initial_capital") or 0))
+        if data.get("paper4_balance") is not None:
+            state.set_paper4_balance(float(data.get("paper4_balance") or 0))
+        state.set_paper4_started_at(_parse_dt(data.get("paper4_started_at")))
+        state.set_paper4_status(str(data.get("paper4_status") or "stopped"))
+        trades4 = []
+        for t in (data.get("paper4_trades") or []):
+            tt = dict(t)
+            tt["entry_time"] = _parse_dt(t.get("entry_time"))
+            tt["exit_time"] = _parse_dt(t.get("exit_time"))
+            trades4.append(tt)
+        state.restore_paper4_trades(trades4)
+        lev4 = data.get("paper4_leverage")
+        if lev4 is not None:
+            state.set_paper4_leverage(float(lev4))
+        wct4 = data.get("paper4_wallet_pct")
+        if wct4 is not None:
+            state.set_paper4_wallet_pct(float(wct4))
+        last4 = data.get("paper4_last_trade")
+        if last4:
+            last4 = dict(last4)
+            last4["entry_time"] = _parse_dt(last4.get("entry_time"))
+            last4["exit_time"] = _parse_dt(last4.get("exit_time"))
+            state.set_paper4_last_trade(last4)
+        open4 = data.get("paper4_open_trade")
+        if open4:
+            open4 = dict(open4)
+            open4["entry_time"] = _parse_dt(open4.get("entry_time"))
+            if open4.get("last_sl_check"):
+                open4["last_sl_check"] = _parse_dt(open4["last_sl_check"])
+            state.set_paper4_open_trade(open4)
+        losses4 = data.get("paper4_consecutive_losses")
+        if losses4 is not None:
+            try:
+                state.set_paper4_consecutive_losses(int(losses4))
+            except (TypeError, ValueError):
+                pass
+        state.set_paper4_cb_light_until(_parse_dt(data.get("paper4_cb_light_until")))
+        state.set_paper4_cb_heavy_until(_parse_dt(data.get("paper4_cb_heavy_until")))
+        hk4 = data.get("paper4_hidden_trade_keys")
+        state.set_paper4_hidden_trade_keys(hk4 if isinstance(hk4, list) else [])
         if _restore_pending or _restore_pending_paper2:
             return True
         return False

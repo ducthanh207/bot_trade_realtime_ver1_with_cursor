@@ -433,7 +433,6 @@ def to_status_dict():
     paper_trades = get_paper_trades()
     n = len(paper_trades)
     wins = sum(1 for t in paper_trades if float(t.get("profit", 0)) > 0)
-    total_pnl = sum(float(t.get("profit", 0)) for t in paper_trades)
     long_ct = sum(1 for t in paper_trades if str(t.get("side", "")).upper() == "LONG")
     short_ct = n - long_ct
     winrate = (wins / n * 100.0) if n else 0.0
@@ -441,22 +440,58 @@ def to_status_dict():
     paper2_trades = get_paper2_trades()
     n2 = len(paper2_trades)
     wins2 = sum(1 for t in paper2_trades if float(t.get("profit", 0)) > 0)
-    total_pnl2 = sum(float(t.get("profit", 0)) for t in paper2_trades)
     long_ct2 = sum(1 for t in paper2_trades if str(t.get("side", "")).upper() == "LONG")
     short_ct2 = n2 - long_ct2
     winrate2 = (wins2 / n2 * 100.0) if n2 else 0.0
     paper2_started = get_paper2_started_at()
 
+    paper3_trades = get_paper3_trades()
+    n3 = len(paper3_trades)
+    wins3 = sum(1 for t in paper3_trades if float(t.get("profit", 0)) > 0)
+    long_ct3 = sum(1 for t in paper3_trades if str(t.get("side", "")).upper() == "LONG")
+    short_ct3 = n3 - long_ct3
+    winrate3 = (wins3 / n3 * 100.0) if n3 else 0.0
+    paper3_started = get_paper3_started_at()
+
+    paper4_trades = get_paper4_trades()
+    n4 = len(paper4_trades)
+    wins4 = sum(1 for t in paper4_trades if float(t.get("profit", 0)) > 0)
+    long_ct4 = sum(1 for t in paper4_trades if str(t.get("side", "")).upper() == "LONG")
+    short_ct4 = n4 - long_ct4
+    winrate4 = (wins4 / n4 * 100.0) if n4 else 0.0
+    paper4_started = get_paper4_started_at()
+
     try:
         from config import settings as _fee_cfg
-        from bot.paper_fees import slot_total_fees_usdt
+        from bot.paper_fees import slot_total_fees_usdt, linear_taker_fee_usdt
 
         _tf = float(getattr(_fee_cfg, "TAKER_FEE", 0.0004))
         _paper_total_fees = slot_total_fees_usdt(paper_trades, get_paper_open_trade(), _tf)
         _paper2_total_fees = slot_total_fees_usdt(paper2_trades, get_paper2_open_trade(), _tf)
+        _paper3_total_fees = slot_total_fees_usdt(paper3_trades, get_paper3_open_trade(), _tf)
+        _paper4_total_fees = slot_total_fees_usdt(paper4_trades, get_paper4_open_trade(), _tf)
+
+        # True net PNL = profit (raw - exit_fee) - entry_fee per trade
+        def _net_pnl(trades, tf):
+            return sum(
+                float(t.get("profit", 0)) - linear_taker_fee_usdt(
+                    float(t.get("size", 0)), float(t.get("entry_price", 0)), tf
+                )
+                for t in trades
+            )
+        total_pnl = _net_pnl(paper_trades, _tf)
+        total_pnl2 = _net_pnl(paper2_trades, _tf)
+        total_pnl3 = _net_pnl(paper3_trades, _tf)
+        total_pnl4 = _net_pnl(paper4_trades, _tf)
     except Exception:
         _paper_total_fees = 0.0
         _paper2_total_fees = 0.0
+        _paper3_total_fees = 0.0
+        _paper4_total_fees = 0.0
+        total_pnl = sum(float(t.get("profit", 0)) for t in paper_trades)
+        total_pnl2 = sum(float(t.get("profit", 0)) for t in paper2_trades)
+        total_pnl3 = sum(float(t.get("profit", 0)) for t in paper3_trades)
+        total_pnl4 = sum(float(t.get("profit", 0)) for t in paper4_trades)
 
     return {
         "balance": get_balance(),
@@ -508,11 +543,38 @@ def to_status_dict():
         "paper3_open_trade": _paper3_open_trade,
         "paper3_trades": list(_paper3_trades),
         "paper3_last_trade": _paper3_last_trade,
+        "paper3_trades_count": n3,
+        "paper3_winrate": round(winrate3, 2),
+        "paper3_total_pnl": round(total_pnl3, 2),
+        "paper3_total_fees": _paper3_total_fees,
+        "paper3_long_count": long_ct3,
+        "paper3_short_count": short_ct3,
         "paper3_leverage": _paper3_leverage,
         "paper3_wallet_pct": _paper3_wallet_pct,
         "paper3_consecutive_losses": _paper3_consecutive_losses,
         "paper3_cb_light_until": str(_paper3_cb_light_until) if _paper3_cb_light_until else None,
         "paper3_cb_heavy_until": str(_paper3_cb_heavy_until) if _paper3_cb_heavy_until else None,
+        "paper3_hidden_trade_keys": get_paper3_hidden_trade_keys(),
+        # Paper trade 4
+        "paper4_initial_capital": _paper4_initial_capital,
+        "paper4_balance": _paper4_balance,
+        "paper4_started_at": paper4_started.isoformat() if paper4_started else None,
+        "paper4_status": _paper4_status,
+        "paper4_open_trade": _paper4_open_trade,
+        "paper4_trades": list(_paper4_trades),
+        "paper4_last_trade": _paper4_last_trade,
+        "paper4_trades_count": n4,
+        "paper4_winrate": round(winrate4, 2),
+        "paper4_total_pnl": round(total_pnl4, 2),
+        "paper4_total_fees": _paper4_total_fees,
+        "paper4_long_count": long_ct4,
+        "paper4_short_count": short_ct4,
+        "paper4_leverage": _paper4_leverage,
+        "paper4_wallet_pct": _paper4_wallet_pct,
+        "paper4_consecutive_losses": _paper4_consecutive_losses,
+        "paper4_cb_light_until": str(_paper4_cb_light_until) if _paper4_cb_light_until else None,
+        "paper4_cb_heavy_until": str(_paper4_cb_heavy_until) if _paper4_cb_heavy_until else None,
+        "paper4_hidden_trade_keys": get_paper4_hidden_trade_keys(),
     }
 
 
@@ -529,6 +591,15 @@ _paper3_wallet_pct = None
 _paper3_consecutive_losses = 0
 _paper3_cb_light_until = None
 _paper3_cb_heavy_until = None
+_paper3_hidden_trade_keys = None
+
+
+def get_paper3_hidden_trade_keys():
+    return list(_paper3_hidden_trade_keys) if _paper3_hidden_trade_keys else []
+
+def set_paper3_hidden_trade_keys(keys):
+    global _paper3_hidden_trade_keys
+    _paper3_hidden_trade_keys = list(keys) if keys else []
 
 
 def set_paper3_initial_capital(value):
@@ -654,3 +725,152 @@ def paper3_pause():
 def paper3_stop():
     global _paper3_status
     _paper3_status = "stopped"
+
+
+# ---------- Paper trade 4 (Method 4 — nâng cấp PP3) ----------
+_paper4_initial_capital = 0.0
+_paper4_balance = 0.0
+_paper4_started_at = None
+_paper4_status = "stopped"
+_paper4_open_trade = None
+_paper4_trades = []
+_paper4_last_trade = None
+_paper4_leverage = None
+_paper4_wallet_pct = None
+_paper4_consecutive_losses = 0
+_paper4_cb_light_until = None
+_paper4_cb_heavy_until = None
+_paper4_hidden_trade_keys = None
+
+
+def get_paper4_hidden_trade_keys():
+    return list(_paper4_hidden_trade_keys) if _paper4_hidden_trade_keys else []
+
+def set_paper4_hidden_trade_keys(keys):
+    global _paper4_hidden_trade_keys
+    _paper4_hidden_trade_keys = list(keys) if keys else []
+
+
+def set_paper4_initial_capital(value):
+    global _paper4_initial_capital
+    _paper4_initial_capital = float(value)
+
+def get_paper4_initial_capital():
+    return _paper4_initial_capital
+
+def set_paper4_balance(value):
+    global _paper4_balance
+    _paper4_balance = float(value)
+
+def get_paper4_balance():
+    return _paper4_balance
+
+def set_paper4_started_at(dt):
+    global _paper4_started_at
+    _paper4_started_at = dt
+
+def get_paper4_started_at():
+    return _paper4_started_at
+
+def set_paper4_status(value):
+    global _paper4_status
+    if value in ("stopped", "running", "paused"):
+        _paper4_status = value
+
+def get_paper4_status():
+    return _paper4_status
+
+def set_paper4_open_trade(trade):
+    global _paper4_open_trade
+    _paper4_open_trade = trade
+
+def get_paper4_open_trade():
+    return _paper4_open_trade
+
+def append_paper4_trade(trade):
+    global _paper4_trades
+    _paper4_trades.append(trade)
+
+def get_paper4_trades():
+    return list(_paper4_trades)
+
+def restore_paper4_trades(trades):
+    global _paper4_trades
+    _paper4_trades = list(trades) if trades else []
+
+def set_paper4_last_trade(trade):
+    global _paper4_last_trade
+    _paper4_last_trade = trade
+
+def get_paper4_last_trade():
+    return _paper4_last_trade
+
+def get_paper4_leverage():
+    return _paper4_leverage
+
+def set_paper4_leverage(value):
+    global _paper4_leverage
+    _paper4_leverage = float(value) if value is not None else None
+
+def get_paper4_wallet_pct():
+    return _paper4_wallet_pct
+
+def set_paper4_wallet_pct(value):
+    global _paper4_wallet_pct
+    _paper4_wallet_pct = float(value) if value is not None else None
+
+def get_paper4_consecutive_losses():
+    return _paper4_consecutive_losses
+
+def set_paper4_consecutive_losses(v):
+    global _paper4_consecutive_losses
+    _paper4_consecutive_losses = int(v)
+
+def get_paper4_cb_light_until():
+    return _paper4_cb_light_until
+
+def set_paper4_cb_light_until(dt):
+    global _paper4_cb_light_until
+    _paper4_cb_light_until = dt
+
+def get_paper4_cb_heavy_until():
+    return _paper4_cb_heavy_until
+
+def set_paper4_cb_heavy_until(dt):
+    global _paper4_cb_heavy_until
+    _paper4_cb_heavy_until = dt
+
+def paper4_start(initial_capital):
+    global _paper4_initial_capital, _paper4_balance, _paper4_started_at, _paper4_status, _paper4_open_trade
+    from datetime import datetime
+    _paper4_open_trade = None
+    _paper4_status = "running"
+    if _paper4_started_at is None:
+        _paper4_initial_capital = float(initial_capital)
+        _paper4_balance = float(initial_capital)
+        _paper4_started_at = datetime.now(_tz_app)
+    else:
+        if initial_capital and initial_capital > 0:
+            _paper4_initial_capital = float(initial_capital)
+
+def paper4_clear_history():
+    global _paper4_trades, _paper4_last_trade, _paper4_open_trade
+    global _paper4_initial_capital, _paper4_balance, _paper4_started_at, _paper4_status
+    global _paper4_consecutive_losses, _paper4_cb_light_until, _paper4_cb_heavy_until
+    _paper4_trades = []
+    _paper4_last_trade = None
+    _paper4_open_trade = None
+    _paper4_started_at = None
+    _paper4_status = "stopped"
+    _paper4_balance = _paper4_initial_capital if _paper4_initial_capital else 0
+    _paper4_consecutive_losses = 0
+    _paper4_cb_light_until = None
+    _paper4_cb_heavy_until = None
+
+def paper4_pause():
+    global _paper4_status
+    _paper4_status = "paused"
+
+def paper4_stop():
+    global _paper4_status
+    _paper4_status = "stopped"

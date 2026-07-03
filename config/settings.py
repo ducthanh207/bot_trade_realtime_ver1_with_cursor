@@ -82,3 +82,21 @@ M3_EMA_TREND_LEN = int(os.environ.get("M3_EMA_TREND_LEN", "50"))
 M3_EMA_TREND_ADX_ABOVE = float(os.environ.get("M3_EMA_TREND_ADX_ABOVE", "30.0"))
 M3_SWING_LOOKBACK = int(os.environ.get("M3_SWING_LOOKBACK", "6"))
 M3_SWING_DISAGREE_SIZE = float(os.environ.get("M3_SWING_DISAGREE_SIZE", "0.6"))
+
+# ---------- Method 4 (nâng cấp PP3: entry/exit/stop) ----------
+# ATR trailing: grace rộng lúc mở lệnh, tự siết lại sau M4_ATR_GRACE_HOURS (khác PP3: PP3 giữ nguyên hệ số lúc mở)
+M4_ATR_MULTIPLIER = float(os.environ.get("M4_ATR_MULTIPLIER", "2.2"))
+M4_ATR_MULTIPLIER_GRACE = float(os.environ.get("M4_ATR_MULTIPLIER_GRACE", "2.5"))
+M4_ATR_GRACE_HOURS = float(os.environ.get("M4_ATR_GRACE_HOURS", "12.0"))
+# Hard stop: lỗ tối đa mỗi lệnh tính trên vốn (thay MAX_STOP_CAPITAL_PCT=0.30 của PP1-3)
+M4_MAX_STOP_CAPITAL_PCT = float(os.environ.get("M4_MAX_STOP_CAPITAL_PCT", "0.10"))
+# Entry filter: chặn SHORT khi RSI nến tín hiệu < floor (đã quá bán), chặn LONG khi RSI > ceil (đã quá mua)
+M4_RSI_SHORT_FLOOR = float(os.environ.get("M4_RSI_SHORT_FLOOR", "38.0"))
+M4_RSI_LONG_CEIL = float(os.environ.get("M4_RSI_LONG_CEIL", "62.0"))
+# Entry filter: cần RSI 1H (2 nến đã đóng) cùng hướng lệnh — SHORT cần RSI 1H đang giảm, LONG cần đang tăng
+M4_REQUIRE_1H_CONFIRM = os.environ.get("M4_REQUIRE_1H_CONFIRM", "true").lower() in ("1", "true", "yes")
+# ADX exhaustion: ADX quá cao thường là cuối trend → giảm size
+M4_ADX_EXHAUSTION = float(os.environ.get("M4_ADX_EXHAUSTION", "45.0"))
+M4_ADX_EXHAUSTION_SIZE = float(os.environ.get("M4_ADX_EXHAUSTION_SIZE", "0.5"))
+# Exit B confirm bars (giống PP3)
+M4_EARLY_EXIT_B_CONFIRM_BARS = int(os.environ.get("M4_EARLY_EXIT_B_CONFIRM_BARS", "2"))

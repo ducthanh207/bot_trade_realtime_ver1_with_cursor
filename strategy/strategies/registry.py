@@ -4,11 +4,13 @@ import os
 METHOD_1 = "1"
 METHOD_2 = "2"
 METHOD_3 = "3"
+METHOD_4 = "4"
 
 _LABELS = {
     METHOD_1: "Phương pháp 1 — thoát cổ điển (4H + early + ATR trail + SL)",
     METHOD_2: "Phương pháp 2 — TP %change + lọc đảo chiều RSI 1H (4H/early chỉ khi lãi + đảo chiều)",
     METHOD_3: "Phương pháp 3 — Exit B (tầng mạnh: RSI slope) + EMA filter ADX>30 + Circuit breaker",
+    METHOD_4: "Phương pháp 4 — nâng cấp PP3: Exit B thay early, hard stop % vốn, xác nhận RSI 1H, filter RSI extreme + ADX exhaustion",
 }
 
 
@@ -25,6 +27,8 @@ def get_trading_method() -> str:
         return METHOD_2
     if v in ("3", "method3", "phuong_phap_3", "pp3"):
         return METHOD_3
+    if v in ("4", "method4", "phuong_phap_4", "pp4"):
+        return METHOD_4
     return METHOD_1
 
 
@@ -51,5 +55,12 @@ def describe_method(method: str = None) -> str:
             "ATR trailing rộng hơn (2.2, grace 2.5 trong 12h đầu); "
             "entry filter EMA50 khi ADX>30; sizing động theo streak thua + ADX zone; "
             "circuit breaker 2 tầng (4 thua→8h cooldown; 7 thua hoặc DD>28%→48h dừng)."
+        )
+    if m == METHOD_4:
+        return (
+            "Phương pháp 4 (nâng cấp PP3): Exit B THAY tầng early exit (thoát kiên nhẫn hơn); "
+            "grace ATR 2.5 tự siết về 2.2 sau 12h; hard stop mỗi lệnh theo % vốn (mặc định 10%); "
+            "entry cần xác nhận hướng RSI 1H; chặn SHORT khi RSI quá bán / LONG khi RSI quá mua; "
+            "giảm size khi ADX quá cao (exhaustion); giữ nguyên EMA50 filter, swing, streak sizing, circuit breaker của PP3."
         )
     return "Phương pháp 1: thoát khi tín hiệu 4H / early / ATR trailing / thanh lý / trần lỗ như code gốc."

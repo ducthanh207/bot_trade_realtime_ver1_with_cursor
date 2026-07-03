@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}Paper trade 4 – ATR Strategy (PP3 nâng cấp){% endblock %}
+{% block content %}
+<section class="paper-layout" role="main">
+  <header class="overview">
+    <label>Vốn (USDT)</label>
+    <input type="number" id="initial_capital" value="1000" min="1" step="1">
+    <button type="button" class="btn-rules" id="btnSetInitialCapital" title="Lưu mốc vốn và đồng bộ ví (balance) theo mốc + toàn bộ lệnh trong state (kể cả lệnh đang ẩn trên UI). Giữ profit/giá/size từng lệnh.">Lưu mốc vốn</button>
+    <button class="start" id="btnStart">Kích hoạt</button>
+    <button class="pause" id="btnPause">Tạm dừng</button>
+    <button class="stop" id="btnStop">Dừng</button>
+    <button type="button" class="btn-clear" id="btnClearHistory">Xóa toàn bộ</button>
+    <span class="status-badge status-stopped" id="statusBadge">stopped</span>
+    <span class="stat" id="statStarted">Bắt đầu: —</span>
+    <span class="stat" id="statTradesDone">Lệnh đã hoàn thành: 0</span>
+    <span class="stat" id="statOrdersOpen">Lệnh_Open: 0</span>
+    <span class="stat" id="statWinrate">Winrate: 0%</span>
+    <span class="stat" id="statPnl" title="Tổng profit đã đóng; mỗi profit đã trừ phí thoát. Đừng cộng trừ với Tổng phí kiểu (mốc + PNL − phí) — sẽ lệch vì phí thoát đã nằm trong PNL.">PNL: 0.00</span>
+    <span class="stat" id="statPnlOpen">PNL_Open: 0.00</span>
+    <span class="stat" id="statBalance" title="Số dư ví (đã trừ phí vào lệnh đang mở nếu có). Capital_Open = Vốn + PNL_Open. Khi có lệnh ẩn, có thể dùng số replay trên thanh.">Vốn: 0.00</span>
+    <span class="stat" id="statTotalFees" title="Tổng phí vào + phí thoát mọi lệnh đóng + phí vào lệnh mở. Khi ẩn lệnh: chỉ tính lệnh không ẩn (đồng bộ Vốn replay).">Tổng phí: 0.00</span>
+    <span class="stat" id="statCapitalOpen">Capital_Open: 0.00</span>
+    <span class="refresh-msg" id="refreshMsg">Cập nhật 5s</span>
+    <div class="overview-rules">
+      <label>Đòn bẩy</label>
+      <input type="number" id="inputLeverage" min="1" max="125" step="1" value="20" title="1–125">
+      <label>% vốn vào lệnh</label>
+      <input type="number" id="inputWalletPct" min="1" max="100" step="0.5" value="30" title="1–100%">
+      <button type="button" class="btn-rules" id="btnCapitalRules">Cập nhật quy tắc vốn</button>
+    </div>
+  </header>
+  <div class="backtest-panel">
+    <span class="backtest-title">Backtest lịch sử (Method 4 — PP3 nâng cấp: Exit B thay early, hard stop % vốn, xác nhận RSI 1H, filter RSI extreme + ADX exhaustion)</span>
+    <label>Từ ngày</label>
+    <input type="date" id="btStartDate">
+    <label>Đến ngày</label>
+    <input type="date" id="btEndDate">
+    <label>Vốn ban đầu</label>
+    <input type="number" id="btCapital" value="1000" min="1" step="1">
+    <button type="button" id="btnBacktest">Chạy backtest</button>
+    <span id="backtestResult"></span>
+  </div>
+  <aside class="orders-panel">
+    <div class="paper-charts-row" aria-label="Biểu đồ paper 4">
+      <div class="paper-chart-box">
+        <div class="paper-chart-title">Vốn theo thời gian</div>
+        <div class="paper-chart-scroll" id="paperChartCapitalScroll">
+          <canvas id="paperChartCapital" width="400" height="150"></canvas>
+        </div>
+      </div>
+      <div class="paper-chart-box">
+        <div class="paper-chart-title">Profit từng lệnh (theo thứ tự lệnh)</div>
+        <div class="paper-chart-scroll" id="paperChartProfitScroll">
+          <canvas id="paperChartProfit" width="400" height="150"></canvas>
+        </div>
+      </div>
+    </div>
+    <h3 class="orders-panel-title">
+      <span class="orders-title-text">Lệnh (mới nhất trên cùng)</span>
+      <span class="orders-title-actions">
+        <button type="button" class="btn-save-hidden" id="btnSaveHidden" title="Lưu danh sách lệnh ẩn (giữ khi F5)">Lưu</button>
+        <button type="button" class="btn-export" id="btnExportCsv">Xuất CSV</button>
+      </span>
+    </h3>
+    <div class="orders-table-wrap" id="paperOrdersTableWrap">
+      <table class="orders-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Symbol</th><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th><th>Profit</th><th>Phí</th><th>% PnL</th><th>%PnL vốn</th><th>Cap After</th><th>Reason</th><th>Thao tác</th><th class="th-hide">Ẩn</th>
+          </tr>
+        </thead>
+        <tbody id="ordersBody"></tbody>
+      </table>
+    </div>
+  </aside>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+  window.PAPER_UI = { slot: 4, prefix: "paper4", apiBase: "/api/paper4" };
+</script>
+<style>
+.backtest-panel {
+  background: #1a1a2e;
+  border: 1px solid #334;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 8px 0 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.backtest-panel label { color: #aaa; font-size: 0.85em; white-space: nowrap; }
+.backtest-panel input[type="date"], .backtest-panel input[type="number"] {
+  background: #111; color: #eee; border: 1px solid #445;
+  border-radius: 4px; padding: 4px 8px; font-size: 0.85em; width: 130px;
+}
+.backtest-panel input[type="number"] { width: 90px; }
+#btnBacktest {
+  background: #5533aa; color: #fff; border: none;
+  border-radius: 4px; padding: 6px 14px; cursor: pointer; font-size: 0.85em;
+}
+#btnBacktest:hover { background: #7755cc; }
+#btnBacktest:disabled { background: #444; cursor: not-allowed; }
+#backtestResult {
+  font-size: 0.82em; color: #9cf; margin-left: 6px; flex: 1;
+  min-width: 200px;
+}
+.backtest-title { color: #9966ff; font-weight: bold; font-size: 0.88em; width: 100%; margin-bottom: 2px; }
+</style>
+<script src="{{ url_for('static', filename='js/paper_charts.js') }}"></script>
+<script src="{{ url_for('static', filename='js/paper.js') }}"></script>
+<script>
+(function() {
+  // Set default dates: end = today, start = 30 days ago
+  var today = new Date();
+  var past = new Date(today); past.setDate(past.getDate() - 30);
+  function fmt(d) { return d.toISOString().slice(0,10); }
+  document.getElementById("btEndDate").value = fmt(today);
+  document.getElementById("btStartDate").value = fmt(past);
+
+  document.getElementById("btnBacktest").addEventListener("click", function() {
+    var btn = this;
+    var res = document.getElementById("backtestResult");
+    var startDate = document.getElementById("btStartDate").value;
+    var endDate = document.getElementById("btEndDate").value;
+    var capital = parseFloat(document.getElementById("btCapital").value);
+    if (!startDate) { alert("Chọn ngày bắt đầu"); return; }
+    if (!capital || capital <= 0) { alert("Vốn phải > 0"); return; }
+
+    btn.disabled = true;
+    btn.textContent = "Đang chạy...";
+    res.textContent = "Đang tải dữ liệu và replay, vui lòng chờ...";
+    res.style.color = "#fc6";
+
+    fetch("/api/paper4/backtest", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        start_date: startDate,
+        end_date: endDate,
+        initial_capital: capital,
+        load_to_state: true
+      })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false;
+      btn.textContent = "Chạy backtest";
+      if (d.error) {
+        res.textContent = "Lỗi: " + d.error;
+        res.style.color = "#f66";
+      } else {
+        res.style.color = "#9cf";
+        res.textContent = [
+          "Xong! " + d.total_trades + " lệnh",
+          "W/L: " + d.wins + "/" + d.losses,
+          "Winrate: " + d.winrate + "%",
+          "PnL: " + (d.total_pnl >= 0 ? "+" : "") + d.total_pnl.toFixed(2),
+          "Vốn cuối: " + d.final_balance.toFixed(2)
+        ].join(" | ");
+      }
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.textContent = "Chạy backtest";
+      res.textContent = "Lỗi kết nối: " + e;
+      res.style.color = "#f66";
+    });
+  });
+})();
+</script>
+{% endblock %}

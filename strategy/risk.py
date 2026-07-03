@@ -44,6 +44,19 @@ def atr_1h_at_entry(df_1h: pd.DataFrame, fallback: float) -> float:
     return fallback
 
 
+def _m4_mult_at(entry_time, now_ts) -> float:
+    """Multiplier Method 4 tại thời điểm now_ts: grace trong M4_ATR_GRACE_HOURS đầu, sau đó siết lại."""
+    try:
+        if entry_time is not None and getattr(entry_time, "tzinfo", None) is not None and now_ts is not None:
+            elapsed_hours = (pd.Timestamp(now_ts) - pd.Timestamp(entry_time)).total_seconds() / 3600
+            if elapsed_hours < settings.M4_ATR_GRACE_HOURS:
+                return settings.M4_ATR_MULTIPLIER_GRACE
+            return settings.M4_ATR_MULTIPLIER
+    except (TypeError, ValueError):
+        pass
+    return settings.M4_ATR_MULTIPLIER
+
+
 def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
     """
     Trailing stop trên nến 1m. Trả (pnl_raw, exit_px) nếu hit, else (None, None).
@@ -54,7 +67,11 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
     atr = open_trade["atr"]
     high = row_1m["high"]
     low = row_1m["low"]
-    mult = open_trade.get("atr_multiplier_override") or settings.ATR_MULTIPLIER
+    if str(open_trade.get("trading_method", "")) == "4":
+        # M4: grace hết hạn theo thời gian nến đang xét (không dùng override cố định lúc mở lệnh)
+        mult = _m4_mult_at(open_trade.get("entry_time"), getattr(row_1m, "name", None))
+    else:
+        mult = open_trade.get("atr_multiplier_override") or settings.ATR_MULTIPLIER
     trail_dist = atr * mult
 
     if side == "LONG":
@@ -76,7 +93,11 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
 
 
 def max_loss_from_capital(open_trade: dict) -> float:
-    return open_trade["capital_before"] * settings.MAX_STOP_CAPITAL_PCT
+    # M4 lưu trần lỗ riêng mỗi lệnh (M4_MAX_STOP_CAPITAL_PCT); các phương pháp khác dùng config chung
+    pct = open_trade.get("max_stop_capital_pct")
+    if pct is None:
+        pct = settings.MAX_STOP_CAPITAL_PCT
+    return open_trade["capital_before"] * float(pct)
 
 
 def m3_adx_zone(adx_value: float):
@@ -87,6 +108,15 @@ def m3_adx_zone(adx_value: float):
     if adx_value < settings.M3_ADX_HIGH:
         return True, settings.M3_ADX_MID_SIZE
     return True, 1.0
+
+
+def m4_adx_zone(adx_value: float):
+    """Như m3_adx_zone nhưng thêm exhaustion: ADX quá cao (cuối trend) → giảm size."""
+    from config import settings
+    allow, mult = m3_adx_zone(adx_value)
+    if allow and adx_value >= settings.M4_ADX_EXHAUSTION:
+        mult = min(mult, settings.M4_ADX_EXHAUSTION_SIZE)
+    return allow, mult
 
 
 def m3_streak_multiplier(consecutive_losses: int) -> float:

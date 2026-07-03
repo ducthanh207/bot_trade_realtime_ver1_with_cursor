@@ -20,8 +20,8 @@
     }
   }
 
-  var lastOrdersBySlot = { 1: [], 2: [], 3: [] };
-  var lastOrdersJsonBySlot = { 1: "", 2: "", 3: "" };
+  var lastOrdersBySlot = { 1: [], 2: [], 3: [], 4: [] };
+  var lastOrdersJsonBySlot = { 1: "", 2: "", 3: "", 4: "" };
   function fetchOrdersForSlot(slot) {
     fetch("/api/orders?slot=" + slot)
       .then(function (r) { return r.json(); })
@@ -37,7 +37,7 @@
       .catch(function () {});
   }
   function fetchOrdersForMarkers() {
-    fetchOrdersForSlot(1); fetchOrdersForSlot(2); fetchOrdersForSlot(3);
+    fetchOrdersForSlot(1); fetchOrdersForSlot(2); fetchOrdersForSlot(3); fetchOrdersForSlot(4);
   }
   var lastOrders = [];
 
@@ -466,6 +466,7 @@
     1: { entryColor: "#26a69a", exitColor: "#ef5350", entryShape: "arrowUp", exitShape: "arrowDown", label: "P1" },
     2: { entryColor: "#00bcd4", exitColor: "#ff9800", entryShape: "circle", exitShape: "circle", label: "P2" },
     3: { entryColor: "#ffeb3b", exitColor: "#9c27b0", entryShape: "square", exitShape: "square", label: "P3" },
+    4: { entryColor: "#8bc34a", exitColor: "#e91e63", entryShape: "circle", exitShape: "square", label: "P4" },
   };
   function isSlotMarkersVisible(slot) {
     var el = document.getElementById("togMarkersP" + slot);
@@ -473,7 +474,7 @@
   }
   function buildMarkersAllSlots() {
     var markers = [];
-    [1, 2, 3].forEach(function (slot) {
+    [1, 2, 3, 4].forEach(function (slot) {
       if (!isSlotMarkersVisible(slot)) return;
       var st = SLOT_STYLES[slot];
       var orders = lastOrdersBySlot[slot] || [];
@@ -1172,7 +1173,7 @@
   var btnIndApply = document.getElementById("btnIndApply");
   if (btnIndApply) { btnIndApply.addEventListener("click", function () { playbackIndex = null; stopPlaybackTimer(); fetchKlinesTv(false); }); }
   ["indEma","indRsi","indEmaRsi","indWmaRsi","indAtr"].forEach(function(id) { var el = document.getElementById(id); if (el) el.addEventListener("keydown", function(ev) { if (ev.key === "Enter") { ev.preventDefault(); fetchKlinesTv(false); } }); });
-  ["togMarkersP1","togMarkersP2","togMarkersP3"].forEach(function(id) { var el = document.getElementById(id); if (el) el.addEventListener("change", function() { applyMarkersTv(); }); });
+  ["togMarkersP1","togMarkersP2","togMarkersP3","togMarkersP4"].forEach(function(id) { var el = document.getElementById(id); if (el) el.addEventListener("change", function() { applyMarkersTv(); }); });
   window.fetchKlinesTv = fetchKlinesTv;
   window.applyMarkersTv = applyMarkersTv;
 

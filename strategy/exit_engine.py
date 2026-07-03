@@ -17,7 +17,7 @@ from config import settings
 from bot.paper_fees import linear_taker_fee_usdt
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 from strategy.signals import long_exit, long_exit_early, short_exit, short_exit_early
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4
 from strategy.risk import (
     check_atr_trailing,
     limit_pnl_and_exit_price,
@@ -114,17 +114,30 @@ def compute_exit_candidates(
         notional = open_trade["notional"]
         maint = settings.MAINT_MARGIN_RATE * notional
 
+        # Method 4: hard stop — thoát ngay khi giá chạm mức lỗ max_loss (không chỉ giới hạn PnL trên giấy)
+        hard_stop_px = None
+        if method == METHOD_4 and size > 0:
+            hard_stop_px = entry - max_loss / size if side == "LONG" else entry + max_loss / size
+
+        liq_px = entry + (maint - margin) / size if side == "LONG" else entry - (maint - margin) / size
+
         for t_1m, m1 in df_slice.iterrows():
             if side == "LONG":
-                liq_px = entry + (maint - margin) / size
-                if m1["low"] <= liq_px:
-                    candidates.append((t_1m, -margin, liq_px, "LIQUIDATION"))
-                    break
+                hit_liq = m1["low"] <= liq_px
+                hit_hs = hard_stop_px is not None and m1["low"] <= hard_stop_px
+                hs_closer = hard_stop_px is not None and hard_stop_px >= liq_px
             else:
-                liq_px = entry - (maint - margin) / size
-                if m1["high"] >= liq_px:
-                    candidates.append((t_1m, -margin, liq_px, "LIQUIDATION"))
-                    break
+                hit_liq = m1["high"] >= liq_px
+                hit_hs = hard_stop_px is not None and m1["high"] >= hard_stop_px
+                hs_closer = hard_stop_px is not None and hard_stop_px <= liq_px
+            # Hard stop gần entry hơn liquidation → trong cùng nến, giá chạm hard stop trước
+            if hit_hs and (not hit_liq or hs_closer):
+                fee_out = linear_taker_fee_usdt(size, hard_stop_px, float(settings.TAKER_FEE))
+                candidates.append((t_1m, -max_loss - fee_out, hard_stop_px, "HARD_STOP"))
+                break
+            if hit_liq:
+                candidates.append((t_1m, -margin, liq_px, "LIQUIDATION"))
+                break
 
             pnl_raw, exit_px = check_atr_trailing(open_trade, m1)
             if pnl_raw is not None:
@@ -158,7 +171,8 @@ def compute_exit_candidates(
             fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EXIT"))
 
-    if apply_4h_layer and allow_early_exit and sig_early:
+    # Method 4: tầng early thường được thay bằng Exit B (RSI vượt ngưỡng + slope N nến) bên dưới
+    if apply_4h_layer and allow_early_exit and sig_early and method != METHOD_4:
         pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
         take = True
         if method == METHOD_2:
@@ -169,11 +183,14 @@ def compute_exit_candidates(
             fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT"))
 
-    # ---------- Phương pháp 3: Exit B (tang manh — nguong + slope) ----------
-    if method == METHOD_3 and df_4h_raw is not None and not df_4h_raw.empty:
+    # ---------- Phương pháp 3/4: Exit B (tang manh — nguong + slope) ----------
+    if method in (METHOD_3, METHOD_4) and df_4h_raw is not None and not df_4h_raw.empty:
         from strategy.signals import long_early_exit_strong_b, short_early_exit_strong_b
         from config import settings as _s3
-        confirm_bars = getattr(_s3, "M3_EARLY_EXIT_B_CONFIRM_BARS", 2)
+        if method == METHOD_4:
+            confirm_bars = getattr(_s3, "M4_EARLY_EXIT_B_CONFIRM_BARS", 2)
+        else:
+            confirm_bars = getattr(_s3, "M3_EARLY_EXIT_B_CONFIRM_BARS", 2)
         i_last = len(df_4h_raw) - 1
         if apply_4h_layer and allow_early_exit:
             if side == "LONG":
