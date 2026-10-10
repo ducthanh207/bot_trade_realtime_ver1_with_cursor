@@ -76,8 +76,19 @@ def _f(v):
 # Dữ liệu đã chuẩn bị cho một cặp coin
 # ---------------------------------------------------------------------------
 class MarketData:
-    def __init__(self, symbol: str, df_1m: pd.DataFrame):
+    """
+    strict=True (mặc định): tại mỗi thời điểm t chỉ đưa cho code chiến lược các nến ĐÃ ĐÓNG trước t
+    (cửa sổ 200 nến như BinanceClient live), tính lại chỉ báo trên đúng cửa sổ đó → không thể nhìn trước.
+    strict=False (--fast): tính chỉ báo một lần trên toàn chuỗi rồi chỉ đọc giá trị của nến đã đóng.
+    Chỉ báo của bot đều là nhân quả (RSI/ATR/EMA/WMA/ADX/rolling chỉ dùng nến cũ hơn), nên hai chế độ
+    cho cùng giá trị — tests/test_live_replay.py kiểm tra điều này bằng cách cắt dữ liệu tại t.
+    """
+
+    WINDOW = 200  # số nến live lấy về: get_klines_4h(limit=200), get_klines_1h(limit=200)
+
+    def __init__(self, symbol: str, df_1m: pd.DataFrame, strict: bool = True):
         self.symbol = symbol
+        self.strict = strict
         self.df_1m = df_1m
         self.idx = df_1m.index
         self.o = df_1m["open"].to_numpy(float)
@@ -87,43 +98,92 @@ class MarketData:
 
         from backtest.binance_data import resample_ohlcv
 
+        # Nến 4H/1H mở lúc T chỉ gộp các nến 1m trong [T, T+4h) → chỉ được đọc khi t >= T+4h (đã đóng).
         self.df4_raw = resample_ohlcv(df_1m, "4h")
         self.df1h_raw = resample_ohlcv(df_1m, "1h")
-        # Chỉ báo tính một lần trên toàn chuỗi; live tính trên cửa sổ 200 nến — RSI/ATR/EMA (RMA/EMA)
-        # hội tụ sai khác < 1e-6 sau ~150 nến, WMA/rolling thì trùng khớp.
-        self.ind4 = add_indicators(self.df4_raw)
-        self.ind4_m3 = add_indicators_m3(
-            self.df4_raw,
-            ema_trend_len=getattr(settings, "M3_EMA_TREND_LEN", 50),
-            swing_lookback=getattr(settings, "M3_SWING_LOOKBACK", 6),
-        )
-        self.ind1h = add_indicators(self.df1h_raw)
-
-        # ATR 1H đã đóng gần nhất tại mỗi phút (refresh_atr_from_1h dùng df_1h.iloc[-2])
-        closed_1h = self.idx.floor("h") - H1
-        self.atr1h_at_min = self.ind1h["ATR"].reindex(closed_1h).to_numpy(float)
+        self._atr_cache = {}
+        if not strict:
+            self.ind4 = add_indicators(self.df4_raw)
+            self.ind4_m3 = self._m3(self.df4_raw)
+            self.ind1h = add_indicators(self.df1h_raw)
+            closed_1h = self.idx.floor("h") - H1
+            self._atr_fast = self.ind1h["ATR"].reindex(closed_1h).to_numpy(float)
 
         # Phút đầu tiên của mỗi nến 4H = tick trong cửa sổ vào lệnh của paper_loop
         utc = self.idx.tz_convert("UTC")
         self.is_boundary = np.asarray((utc.hour % 4 == 0) & (utc.minute == 0))
 
-    def df_1h_at(self, t):
-        """df_1h như live tại thời điểm t: iloc[-3], iloc[-2] = 2 nến 1H đã đóng, iloc[-1] = nến đang chạy."""
-        closed = self.ind1h.loc[: t - H1].tail(2)
-        if len(closed) < 2:
-            return pd.DataFrame()
-        forming = closed.iloc[[-1]].copy()
-        forming.index = pd.DatetimeIndex([t.floor("h")])
-        return pd.concat([closed, forming])
+    @staticmethod
+    def _m3(df):
+        return add_indicators_m3(
+            df,
+            ema_trend_len=getattr(settings, "M3_EMA_TREND_LEN", 50),
+            swing_lookback=getattr(settings, "M3_SWING_LOOKBACK", 6),
+        )
 
-    def df_4h_raw_at(self, t, open_px):
-        """df_4h_raw như live (200 nến, nến cuối đang chạy chỉ có giá mở)."""
-        closed = self.df4_raw.loc[: t - H4].tail(199)
+    @staticmethod
+    def _with_forming(closed: pd.DataFrame, t, open_px):
+        """Thêm nến đang chạy (mới có giá mở) như dữ liệu live tại tick đầu tiên."""
         forming = pd.DataFrame(
             {"open": [open_px], "high": [open_px], "low": [open_px], "close": [open_px], "volume": [0.0]},
-            index=pd.DatetimeIndex([t]),
+            index=pd.DatetimeIndex([t], name=closed.index.name),
         )
         return pd.concat([closed, forming])
+
+    def _past(self, df_raw, last_closed_open):
+        """Các nến đã đóng, nến cuối mở lúc last_closed_open (tối đa WINDOW-1 nến, chừa chỗ nến đang chạy)."""
+        return df_raw.loc[:last_closed_open].tail(self.WINDOW - 1)
+
+    def atr_at(self, i: int) -> float:
+        """ATR nến 1H đã đóng gần nhất tại phút i (refresh_atr_from_1h dùng df_1h.iloc[-2])."""
+        if not self.strict:
+            return self._atr_fast[i]
+        h = self.idx[i].floor("h") - H1
+        v = self._atr_cache.get(h)
+        if v is None:
+            ind = add_indicators(self._past(self.df1h_raw, h))
+            v = float(ind["ATR"].iloc[-1]) if len(ind) and ind.index[-1] == h else float("nan")
+            self._atr_cache[h] = v
+        return v
+
+    def context_at(self, i: int):
+        """Dữ liệu paper_loop thấy ở tick đầu nến 4H mở lúc t = idx[i]; None nếu chưa đủ dữ liệu."""
+        t, open_px = self.idx[i], float(self.o[i])
+        t_closed, t_prev = t - H4, t - 2 * H4
+        if self.strict:
+            raw4 = self._past(self.df4_raw, t_closed)
+            ind4 = add_indicators(raw4)
+            if len(ind4) < 2 or ind4.index[-1] != t_closed or ind4.index[-2] != t_prev:
+                return None
+            m3 = self._m3(raw4)
+            row_m3 = m3.iloc[-1] if len(m3) and m3.index[-1] == t_closed else None
+            raw1 = self._past(self.df1h_raw, t - H1)
+            ind1 = add_indicators(raw1)
+            if len(ind1) >= 2 and ind1.index[-1] == t - H1:
+                last = ind1.iloc[[-1]].copy()
+                last.index = pd.DatetimeIndex([t], name=ind1.index.name)
+                df_1h = pd.concat([ind1.tail(2), last])  # nến đang chạy: giá trị không được đọc
+            else:
+                df_1h = pd.DataFrame()
+            return {
+                "row_closed": ind4.iloc[-1], "prev_row_closed": ind4.iloc[-2], "row_m3": row_m3,
+                "df_1h": df_1h, "df_4h_raw": self._with_forming(raw4, t, open_px),
+            }
+        if t_closed not in self.ind4.index or t_prev not in self.ind4.index:
+            return None
+        closed1 = self.ind1h.loc[: t - H1].tail(2)
+        if len(closed1) == 2 and closed1.index[-1] == t - H1:
+            last = closed1.iloc[[-1]].copy()
+            last.index = pd.DatetimeIndex([t], name=closed1.index.name)
+            df_1h = pd.concat([closed1, last])
+        else:
+            df_1h = pd.DataFrame()
+        return {
+            "row_closed": self.ind4.loc[t_closed], "prev_row_closed": self.ind4.loc[t_prev],
+            "row_m3": self.ind4_m3.loc[t_closed] if t_closed in self.ind4_m3.index else None,
+            "df_1h": df_1h,
+            "df_4h_raw": self._with_forming(self._past(self.df4_raw, t_closed), t, open_px),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +247,7 @@ class SlotSim:
     def step_layer1(self, md: "MarketData", i: int) -> list:
         """Tick đầu phút i: refresh ATR 1H, quét nến 1m vừa đóng (i-1) rồi nến đang chạy (i, mới có giá mở)."""
         ot = self.open_trade
-        atr = md.atr1h_at_min[i]
+        atr = md.atr_at(i)
         if not np.isnan(atr) and atr > 0:
             ot["atr"] = float(atr)  # refresh_atr_from_1h
         t, prev_t = md.idx[i], md.idx[i - 1]
@@ -347,16 +407,7 @@ def run_symbol(md: MarketData, start, methods, capital, leverage, wallet_pct, lo
         is_b = bool(md.is_boundary[i])
         open_slots = [s for s in slots if s.open_trade is not None]
 
-        ctx = None
-        if is_b:
-            t_closed, t_prev = t - H4, t - 2 * H4
-            if t_closed in md.ind4.index and t_prev in md.ind4.index:
-                ctx = {
-                    "row_closed": md.ind4.loc[t_closed],
-                    "prev_row_closed": md.ind4.loc[t_prev],
-                    "row_m3": md.ind4_m3.loc[t_closed] if t_closed in md.ind4_m3.index else None,
-                    "df_1h": md.df_1h_at(t),
-                }
+        ctx = md.context_at(i) if is_b else None
 
         # ---- Lệnh đang mở: tầng 1 mỗi phút, tầng 4H ở đầu nến 4H ----
         for s in open_slots:
@@ -371,7 +422,7 @@ def run_symbol(md: MarketData, start, methods, capital, leverage, wallet_pct, lo
                 ot["last_sl_check"] = None  # tầng 1 đã chạy ở trên
                 try:
                     cands += compute_exit_candidates(
-                        ot, df_1m_now, ctx["df_1h"], md.df_4h_raw_at(t, o[i]),
+                        ot, df_1m_now, ctx["df_1h"], ctx["df_4h_raw"],
                         ctx["prev_row_closed"], ctx["row_closed"], float(o[i]), t,
                         paper_use_4h_window=True, in_4h_window=True, method=s.method,
                         lookback_trades=s.lookback_trades, allow_early_exit=allow_early,
@@ -457,7 +508,7 @@ def monthly_returns(symbol, slot: SlotSim, capital):
     return rows
 
 
-def _apply_overrides(pairs):
+def _apply_overrides(pairs, quiet=False):
     for kv in pairs or []:
         key, _, val = kv.partition("=")
         key = key.strip().upper()
@@ -469,7 +520,27 @@ def _apply_overrides(pairs):
         else:
             new = type(cur)(val)
         setattr(settings, key, new)
-        print(f"  override {key} = {new}")
+        if not quiet:
+            print(f"  override {key} = {new}")
+
+
+def _backtest_one(job):
+    """Chạy 1 cặp (trong process riêng). Chỉ đọc cache đã tải, không gửi request nào."""
+    from backtest.binance_data import load_1m
+
+    sym, start, end, a = job["symbol"], job["start"], job["end"], job["args"]
+    _apply_overrides(a["set"], quiet=True)  # process con import lại settings → áp lại --set
+    df_1m = load_1m(sym, start - timedelta(days=a["warmup_days"]), end, offline=True)
+    if df_1m.empty:
+        return sym, None
+    md = MarketData(sym, df_1m, strict=not a["fast"])
+    slots = run_symbol(md, start, a["methods"], a["capital"], a["leverage"], a["wallet_pct"], a["lookback_trades"])
+    res = {"summaries": [], "months": [], "trades": []}
+    for s in slots:
+        res["summaries"].append(summarize(sym, s, a["capital"], start, end))
+        res["months"] += monthly_returns(sym, s, a["capital"])
+        res["trades"] += [{"symbol": sym, **t} for t in s.trades]
+    return sym, res
 
 
 def main(argv=None):
@@ -486,40 +557,64 @@ def main(argv=None):
     p.add_argument("--warmup-days", type=int, default=60, help="Số ngày dữ liệu tải thêm trước --start để làm nóng chỉ báo")
     p.add_argument("--source", choices=["api", "vision"], default="api",
                    help="api = API Futures công khai fapi.binance.com (mặc định); vision = file zip data.binance.vision (nhanh hơn)")
+    p.add_argument("--workers", type=int, default=None, help="Số cặp backtest song song (mặc định: số nhân CPU - 1)")
+    p.add_argument("--download-workers", type=int, default=3, help="Số luồng tải dữ liệu (dùng chung giới hạn weight)")
+    p.add_argument("--max-weight", type=int, default=1200, help="Weight API tối đa mỗi phút (Binance cho 2400/IP)")
+    p.add_argument("--fast", action="store_true", help="Tính chỉ báo 1 lần trên toàn chuỗi (nhanh ~4 lần, kết quả như strict)")
     p.add_argument("--out", default=None, help="Thư mục kết quả (mặc định backtest/results/<thời điểm chạy>)")
     a = p.parse_args(argv)
 
-    from backtest.binance_data import load_1m
+    import os
+    from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+    from backtest import binance_data
 
     _apply_overrides(a.set)
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     end = datetime.fromisoformat(a.end).replace(tzinfo=timezone.utc) if a.end else today
     start = datetime.fromisoformat(a.start).replace(tzinfo=timezone.utc) if a.start else end - timedelta(days=365)
+    symbols = list(dict.fromkeys(s.upper() for s in a.symbols))
     out = Path(a.out) if a.out else ROOT / "backtest" / "results" / datetime.now().strftime("%Y%m%d_%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
 
+    # 1) Tải dữ liệu: nhiều luồng nhưng chung một bộ giới hạn weight → không bị 429/418
+    binance_data.LIMITER.max_weight = a.max_weight
+    print(f"Tải dữ liệu 1m {start.date()} → {end.date()} (+{a.warmup_days} ngày warm-up) cho {len(symbols)} cặp...")
+    with ThreadPoolExecutor(max_workers=max(1, a.download_workers)) as ex:
+        futs = {ex.submit(binance_data.download, sym, start - timedelta(days=a.warmup_days), end, print, a.source): sym
+                for sym in symbols}
+        for f in as_completed(futs):
+            try:
+                f.result()
+            except Exception as e:
+                print(f"  {futs[f]}: lỗi tải dữ liệu ({e}), bỏ qua cặp này")
+
+    # 2) Backtest song song theo cặp, mỗi cặp đi tuần tự từng phút theo thời gian
+    workers = a.workers or max(1, (os.cpu_count() or 2) - 1)
+    mode = "nhanh (--fast)" if a.fast else "strict: chỉ dùng nến đã đóng tại từng thời điểm"
+    print(f"Backtest {', '.join('PP' + m for m in a.methods)} | {workers} process | chế độ {mode}")
+    args = {k: getattr(a, k) for k in ("set", "warmup_days", "fast", "methods", "capital", "leverage", "wallet_pct", "lookback_trades")}
+    jobs = [{"symbol": s, "start": start, "end": end, "args": args} for s in symbols]
     summaries, all_trades, months = [], [], []
-    for sym in [s.upper() for s in a.symbols]:
-        print(f"\n=== {sym}: tải dữ liệu 1m {start.date()} → {end.date()} (+{a.warmup_days} ngày warm-up) ===")
-        df_1m = load_1m(sym, start - timedelta(days=a.warmup_days), end, source=a.source)
-        if df_1m.empty:
-            print(f"  Không có dữ liệu cho {sym}, bỏ qua.")
-            continue
-        md = MarketData(sym, df_1m)
-        print(f"  {len(df_1m):,} nến 1m. Đang chạy {', '.join('PP' + m for m in a.methods)}...")
-        slots = run_symbol(md, start, a.methods, a.capital, a.leverage, a.wallet_pct, a.lookback_trades)
-        for s in slots:
-            summaries.append(summarize(sym, s, a.capital, start, end))
-            months += monthly_returns(sym, s, a.capital)
-            for t in s.trades:
-                all_trades.append({"symbol": sym, **t})
+    with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as ex:
+        for f in as_completed([ex.submit(_backtest_one, j) for j in jobs]):
+            sym, res = f.result()
+            if res is None:
+                print(f"  {sym}: không có dữ liệu, bỏ qua.")
+                continue
+            print(f"  {sym}: xong ({sum(x['trades'] for x in res['summaries'])} lệnh)")
+            summaries += res["summaries"]
+            months += res["months"]
+            all_trades += res["trades"]
 
     if not summaries:
         print("Không có kết quả.")
         return 1
     df_sum = pd.DataFrame(summaries).sort_values("return_pct", ascending=False)
     df_sum.to_csv(out / "summary.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(all_trades).round(6).to_csv(out / "trades.csv", index=False, encoding="utf-8-sig")
+    df_tr = pd.DataFrame(all_trades)
+    num = df_tr.select_dtypes("number").columns
+    df_tr[num] = df_tr[num].round(6)
+    df_tr.to_csv(out / "trades.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(months).to_csv(out / "monthly.csv", index=False, encoding="utf-8-sig")
 
     print("\n" + df_sum.drop(columns=["exit_reasons"]).to_string(index=False))

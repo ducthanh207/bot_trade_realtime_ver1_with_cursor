@@ -10,21 +10,35 @@ Chạy lại **đúng vòng lặp `bot/paper_loop.py`** trên dữ liệu lịch
 cd D:\bot_trade_realtime_ver1_with_cursor-main
 pip install -r requirements.txt
 
-# Mặc định: SYMBOL trong .env (BTCUSDT), 365 ngày gần nhất, cả 4 phương pháp
+# Chiến lược 4, nhiều cặp chạy song song, khoảng thời gian tự chọn
+python backtest/live_replay.py --methods 4 --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT --start 2026-01-01 --end 2026-10-01
+
+# Mặc định: SYMBOL trong .env, 365 ngày gần nhất, cả 4 phương pháp
 python backtest/live_replay.py
 
-# Nhiều cặp + khoảng thời gian tự chọn
-python backtest/live_replay.py --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT --start 2025-10-01 --end 2026-10-01
-
-# Chỉ chiến lược 4 (PP4), nhiều cặp, khoảng thời gian tự chọn
-python backtest/live_replay.py --methods 4 --symbols BTCUSDT ETHUSDT SOLUSDT --start 2026-01-01 --end 2026-10-01
-
-# Chỉ PP3, PP4 và thử tham số khác mà không sửa .env
-python backtest/live_replay.py --methods 3 4 --set M4_MAX_STOP_CAPITAL_PCT=0.08 M4_ATR_MULTIPLIER=2.0
+# Thử tham số khác mà không sửa .env
+python backtest/live_replay.py --methods 4 --set M4_MAX_STOP_CAPITAL_PCT=0.08 M4_ATR_MULTIPLIER=2.0
 ```
 
-Lần đầu tải nến 1m từ API Futures công khai `fapi.binance.com` (thêm `--source vision` để tải file zip nhanh hơn từ `data.binance.vision`), lưu theo tháng vào `backtest/data_cache/`;
-các lần sau chạy không cần mạng. Một năm 1 cặp ≈ 525k nến 1m, chạy 4 phương pháp mất khoảng 1 phút.
+Tuỳ chọn hay dùng: `--workers 4` (số cặp chạy song song, mặc định số nhân CPU - 1), `--download-workers 3`,
+`--max-weight 1200`, `--source vision` (tải zip, nhanh hơn API), `--fast` (nhanh ~4 lần, cùng kết quả).
+
+## Không nhìn trước tương lai (look-ahead)
+
+Mặc định chạy chế độ **strict**: thời gian đi tuần tự từng phút, từng ngày. Tại mỗi thời điểm t, code chiến lược chỉ nhận
+các nến đã đóng trước t (cửa sổ 200 nến như bot live lấy từ Binance) và chỉ báo được tính lại trên đúng cửa sổ đó:
+
+- Vào/thoát 4H ở phút đầu nến 4H mới, dùng nến 4H vừa đóng; giá khớp = giá mở phút đó, không dùng high/low/close của nến đang chạy.
+- Trailing/thanh lý: nến 1m vừa đóng được dùng đủ high/low, nến đang chạy chỉ có giá mở. ATR lấy từ nến 1H đã đóng.
+- Tải dữ liệu chỉ lưu nến 1m đã đóng (bỏ nến đang chạy API trả về).
+- `tests/test_live_replay.py::test_no_lookahead_data_cut_at_t` xoá toàn bộ dữ liệu sau t rồi so sánh: mọi giá trị bot thấy tại t phải giữ nguyên.
+
+## Không bị lỗi request quá nhiều
+
+- Bước tải chạy trước, nhiều luồng nhưng dùng chung một bộ đếm weight (mặc định 1200 trong giới hạn 2400 weight/phút của Binance, mỗi lần lấy 1500 nến tốn 10 weight).
+- Đọc header `X-MBX-USED-WEIGHT-1M`, tự nghỉ khi gần ngưỡng; gặp 429/418 thì nghỉ đúng `Retry-After` rồi thử lại.
+- Cache theo tháng trong `backtest/data_cache/`; tháng đang chạy chỉ tải phần còn thiếu. Bước backtest song song chỉ đọc cache, không gửi request.
+- Một năm 1 cặp ≈ 350 request ≈ 3 phút ở lần tải đầu; các lần sau gần như tức thì.
 
 ## Kết quả (`backtest/results/<thời điểm chạy>/`)
 

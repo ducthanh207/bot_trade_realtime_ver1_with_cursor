@@ -33,12 +33,22 @@ def _synthetic_1m(days=40, seed=7):
     return pd.DataFrame({"open": o, "high": h, "low": l, "close": c, "volume": 1.0}, index=idx)
 
 
-MD = MarketData("SYN", _synthetic_1m())
+DF_1M = _synthetic_1m()
+MD = MarketData("SYN", DF_1M, strict=False)
+MD_STRICT = MarketData("SYN", DF_1M, strict=True)
+
+
+def _df_1h_at(t):
+    """df_1h như live tại t: iloc[-3], iloc[-2] = 2 nến 1H đã đóng, iloc[-1] = nến đang chạy."""
+    closed = MD.ind1h.loc[: t - pd.Timedelta(hours=1)].tail(2)
+    forming = closed.iloc[[-1]].copy()
+    forming.index = pd.DatetimeIndex([t.floor("h")])
+    return pd.concat([closed, forming])
 
 
 def _open(slot, i, side, mult):
     t, px = MD.idx[i], float(MD.o[i])
-    atr = float(MD.atr1h_at_min[i])
+    atr = float(MD.atr_at(i))
     size = slot.balance * slot.wallet_pct * slot.leverage / px
     ot = {
         "side": side, "entry_time": t, "entry_price": px, "size": size,
@@ -72,7 +82,7 @@ def _first_exit_reference(ot, method, i0, limit):
             index=pd.DatetimeIndex([prev_t, t]),
         )
         cands = compute_exit_candidates(
-            ot, df_1m, MD.df_1h_at(t), pd.DataFrame(), MD.ind4.iloc[-3], MD.ind4.iloc[-2], float(MD.o[i]), t,
+            ot, df_1m, _df_1h_at(t), pd.DataFrame(), MD.ind4.iloc[-3], MD.ind4.iloc[-2], float(MD.o[i]), t,
             paper_use_4h_window=True, in_4h_window=False, method=method,
             lookback_trades=15, allow_early_exit=False,
         )
@@ -101,9 +111,44 @@ def test_layer1_matches_exit_engine():
     assert checked >= 8
 
 
+def _same(a, b):
+    if a is None or b is None:
+        return a is None and b is None
+    if isinstance(a, pd.DataFrame):
+        return a.index.equals(b.index) and np.allclose(a.to_numpy(float), b.to_numpy(float), equal_nan=True, rtol=0, atol=0)
+    sa, sb = pd.Series(a).astype(float), pd.Series(b).astype(float)
+    return sa.index.equals(sb.index) and np.array_equal(sa.to_numpy(), sb.to_numpy(), equal_nan=True)
+
+
+def test_no_lookahead_data_cut_at_t():
+    """Cắt bỏ toàn bộ dữ liệu sau thời điểm t: mọi thứ bot thấy tại t phải giữ nguyên → không nhìn trước."""
+    bpos = np.flatnonzero(MD.is_boundary)
+    for strict in (False, True):
+        full = MD_STRICT if strict else MD
+        for i in bpos[60::25]:
+            cut = MarketData("SYN", DF_1M.iloc[: i + 1], strict=strict)  # chỉ còn dữ liệu đến giá mở phút i
+            a, b = full.context_at(i), cut.context_at(i)
+            assert (a is None) == (b is None)
+            if a is None:
+                continue
+            for k in ("row_closed", "prev_row_closed", "row_m3", "df_1h", "df_4h_raw"):
+                assert _same(a[k], b[k]), (strict, i, k)
+            for j in (i, i - 1, i - 59):
+                x, y = full.atr_at(j), cut.atr_at(j)
+                assert (np.isnan(x) and np.isnan(y)) or x == y
+
+
+def test_strict_matches_fast_indicators():
+    """Chế độ strict (tính lại trên cửa sổ 200 nến như live) gần như trùng tính một lần trên toàn chuỗi."""
+    for i in np.flatnonzero(MD.is_boundary)[60::40]:
+        a, b = MD.context_at(i), MD_STRICT.context_at(i)
+        for k in ("RSI", "EMA_RSI", "WMA_RSI", "ATR"):
+            assert abs(float(a["row_closed"][k]) - float(b["row_closed"][k])) < 1e-3
+
+
 def test_full_run_ledger_consistent():
     start = MD.idx[60 * 24 * 20]
-    slots = run_symbol(MD, start, ALL_METHODS, 50.0, 20.0, 0.3, 15)
+    slots = run_symbol(MD_STRICT, start, ALL_METHODS, 50.0, 20.0, 0.3, 15)
     assert {s.method for s in slots} == set(ALL_METHODS)
     for s in slots:
         bal = 50.0
@@ -118,5 +163,7 @@ def test_full_run_ledger_consistent():
 
 if __name__ == "__main__":
     test_layer1_matches_exit_engine()
+    test_no_lookahead_data_cut_at_t()
+    test_strict_matches_fast_indicators()
     test_full_run_ledger_consistent()
     print("OK")
