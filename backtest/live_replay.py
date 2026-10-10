@@ -484,6 +484,8 @@ def main(argv=None):
     p.add_argument("--lookback-trades", type=int, default=getattr(settings, "LOOKBACK_TRADES", 15))
     p.add_argument("--set", nargs="*", metavar="KEY=VALUE", help="Ghi đè tham số settings, vd M4_MAX_STOP_CAPITAL_PCT=0.08")
     p.add_argument("--warmup-days", type=int, default=60, help="Số ngày dữ liệu tải thêm trước --start để làm nóng chỉ báo")
+    p.add_argument("--source", choices=["api", "vision"], default="api",
+                   help="api = API Futures công khai fapi.binance.com (mặc định); vision = file zip data.binance.vision (nhanh hơn)")
     p.add_argument("--out", default=None, help="Thư mục kết quả (mặc định backtest/results/<thời điểm chạy>)")
     a = p.parse_args(argv)
 
@@ -499,7 +501,7 @@ def main(argv=None):
     summaries, all_trades, months = [], [], []
     for sym in [s.upper() for s in a.symbols]:
         print(f"\n=== {sym}: tải dữ liệu 1m {start.date()} → {end.date()} (+{a.warmup_days} ngày warm-up) ===")
-        df_1m = load_1m(sym, start - timedelta(days=a.warmup_days), end)
+        df_1m = load_1m(sym, start - timedelta(days=a.warmup_days), end, source=a.source)
         if df_1m.empty:
             print(f"  Không có dữ liệu cho {sym}, bỏ qua.")
             continue

@@ -2,8 +2,8 @@
 """
 Tải và cache dữ liệu nến 1m Binance USDT-M Futures cho backtest local.
 
-Nguồn chính: file zip theo tháng/ngày trên data.binance.vision (nhanh, không tốn rate limit).
-Dự phòng: API công khai fapi.binance.com/fapi/v1/klines (giống bot live).
+Nguồn mặc định: API công khai Binance Futures fapi.binance.com/fapi/v1/klines (giống bot live).
+Tuỳ chọn source="vision": file zip theo tháng trên data.binance.vision (nhanh hơn), lỗi thì quay về API.
 Cache: backtest/data_cache/<SYMBOL>/1m-YYYY-MM.csv.gz — tải một lần, chạy lại không cần mạng.
 
 Nến 1H / 4H được gộp (resample) từ 1m theo giờ UTC, trùng với nến 1H/4H của Binance
@@ -87,7 +87,7 @@ def _month_iter(start: date, end: date):
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
 
 
-def _load_month(symbol: str, y: int, m: int, log=print) -> pd.DataFrame:
+def _load_month(symbol: str, y: int, m: int, log=print, source: str = "api") -> pd.DataFrame:
     month_start = datetime(y, m, 1, tzinfo=timezone.utc)
     month_end = datetime(y + (m == 12), 1 if m == 12 else m + 1, 1, tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
@@ -99,13 +99,13 @@ def _load_month(symbol: str, y: int, m: int, log=print) -> pd.DataFrame:
         return df
 
     df = None
-    if complete:
+    if complete and source == "vision":
         try:
             df = _read_vision_zip(f"{VISION_BASE}/monthly/klines/{symbol}/1m/{symbol}-1m-{y:04d}-{m:02d}.zip")
         except Exception as e:  # mạng chặn data.binance.vision → dùng REST
             log(f"  data.binance.vision lỗi ({e}), chuyển sang REST")
     if df is None or df.empty:
-        log(f"  {symbol} {y:04d}-{m:02d}: tải qua REST fapi...")
+        log(f"  {symbol} {y:04d}-{m:02d}: tải qua API fapi.binance.com...")
         df = _fetch_rest(symbol, month_start, min(month_end, now))
     else:
         log(f"  {symbol} {y:04d}-{m:02d}: tải zip tháng OK ({len(df)} nến)")
@@ -115,10 +115,10 @@ def _load_month(symbol: str, y: int, m: int, log=print) -> pd.DataFrame:
     return df
 
 
-def load_1m(symbol: str, start: datetime, end: datetime, log=print) -> pd.DataFrame:
+def load_1m(symbol: str, start: datetime, end: datetime, log=print, source: str = "api") -> pd.DataFrame:
     """Nến 1m [start, end) — index tz Asia/Bangkok giống BinanceClient của bot."""
     symbol = symbol.upper()
-    parts = [_load_month(symbol, y, m, log) for y, m in _month_iter(start.date(), (end - timedelta(minutes=1)).date())]
+    parts = [_load_month(symbol, y, m, log, source) for y, m in _month_iter(start.date(), (end - timedelta(minutes=1)).date())]
     parts = [p for p in parts if p is not None and not p.empty]
     if not parts:
         return pd.DataFrame(columns=COLS)

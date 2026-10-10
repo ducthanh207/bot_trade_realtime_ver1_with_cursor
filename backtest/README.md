@@ -16,11 +16,14 @@ python backtest/live_replay.py
 # Nhiều cặp + khoảng thời gian tự chọn
 python backtest/live_replay.py --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT --start 2025-10-01 --end 2026-10-01
 
+# Chỉ chiến lược 4 (PP4), nhiều cặp, khoảng thời gian tự chọn
+python backtest/live_replay.py --methods 4 --symbols BTCUSDT ETHUSDT SOLUSDT --start 2026-01-01 --end 2026-10-01
+
 # Chỉ PP3, PP4 và thử tham số khác mà không sửa .env
 python backtest/live_replay.py --methods 3 4 --set M4_MAX_STOP_CAPITAL_PCT=0.08 M4_ATR_MULTIPLIER=2.0
 ```
 
-Lần đầu tải nến 1m từ `data.binance.vision` (dự phòng: API `fapi.binance.com`), lưu vào `backtest/data_cache/`;
+Lần đầu tải nến 1m từ API Futures công khai `fapi.binance.com` (thêm `--source vision` để tải file zip nhanh hơn từ `data.binance.vision`), lưu theo tháng vào `backtest/data_cache/`;
 các lần sau chạy không cần mạng. Một năm 1 cặp ≈ 525k nến 1m, chạy 4 phương pháp mất khoảng 1 phút.
 
 ## Kết quả (`backtest/results/<thời điểm chạy>/`)
