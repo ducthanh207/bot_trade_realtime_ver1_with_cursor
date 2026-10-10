@@ -83,10 +83,10 @@ def _http():
     return s
 
 
-def _get_json(url: str, params: dict, log=print, max_retries: int = 8):
+def _get_json(url: str, params: dict, log=print, max_retries: int = 8, weight: int = KLINES_WEIGHT):
     backoff = 2.0
     for attempt in range(1, max_retries + 1):
-        LIMITER.acquire(KLINES_WEIGHT)
+        LIMITER.acquire(weight)
         try:
             r = _http().get(url, params=params, timeout=30)
         except requests.RequestException as e:

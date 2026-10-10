@@ -545,7 +545,13 @@ def _backtest_one(job):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Backtest phát lại vòng lặp live (PP1–PP4) trên nhiều cặp coin.")
-    p.add_argument("--symbols", nargs="+", default=[settings.SYMBOL], help="Ví dụ: BTCUSDT ETHUSDT SOLUSDT (mặc định: SYMBOL trong .env)")
+    p.add_argument("--symbols", nargs="+", default=None, help="Ví dụ: BTCUSDT ETHUSDT SOLUSDT (mặc định: SYMBOL trong .env)")
+    p.add_argument("--universe", choices=["volume", "marketcap", "both"], default=None,
+                   help="Tự chọn cặp: volume = biến động volume lớn nhất trong khoảng backtest; marketcap = vốn hoá lớn nhất; both = cả 2 nhóm")
+    p.add_argument("--top", type=int, default=10, help="Số cặp mỗi nhóm khi dùng --universe (mặc định 10)")
+    p.add_argument("--liquid-pool", type=int, default=50, help="Nhóm volume: chỉ xét N cặp có volume trung bình lớn nhất (mặc định 50)")
+    p.add_argument("--volume-metric", choices=["cv", "total"], default="cv",
+                   help="cv = volume biến động mạnh nhất (độ lệch chuẩn/trung bình volume ngày); total = tổng volume lớn nhất")
     p.add_argument("--start", default=None, help="YYYY-MM-DD (mặc định: 365 ngày trước)")
     p.add_argument("--end", default=None, help="YYYY-MM-DD, không gồm ngày này (mặc định: hôm nay)")
     p.add_argument("--methods", nargs="+", default=list(ALL_METHODS), choices=list(ALL_METHODS))
@@ -572,12 +578,32 @@ def main(argv=None):
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     end = datetime.fromisoformat(a.end).replace(tzinfo=timezone.utc) if a.end else today
     start = datetime.fromisoformat(a.start).replace(tzinfo=timezone.utc) if a.start else end - timedelta(days=365)
-    symbols = list(dict.fromkeys(s.upper() for s in a.symbols))
     out = Path(a.out) if a.out else ROOT / "backtest" / "results" / datetime.now().strftime("%Y%m%d_%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
+    binance_data.LIMITER.max_weight = a.max_weight
+
+    # 0) Danh sách cặp: tự nhập (--symbols) và/hoặc tự chọn (--universe)
+    groups = {}  # nhóm → danh sách cặp
+    if a.symbols or not a.universe:
+        groups["manual"] = [s.upper() for s in (a.symbols or [settings.SYMBOL])]
+    if a.universe:
+        from backtest.universe import select_universe
+
+        ranked = select_universe(a.universe, start, end, a.top, a.liquid_pool, a.volume_metric)
+        uni_rows = []
+        for g, df in ranked.items():
+            if df.empty:
+                print(f"  Nhóm {g}: không chọn được cặp nào")
+                continue
+            groups[g] = list(df["symbol"])
+            print(f"\nNhóm {g} (top {a.top}):\n" + df.to_string(index=False))
+            uni_rows.append(df.assign(group=g))
+        if uni_rows:
+            pd.concat(uni_rows).to_csv(out / "universe.csv", index=False, encoding="utf-8-sig")
+    symbols = list(dict.fromkeys(s for syms in groups.values() for s in syms))
+    sym_groups = {s: [g for g, syms in groups.items() if s in syms] for s in symbols}
 
     # 1) Tải dữ liệu: nhiều luồng nhưng chung một bộ giới hạn weight → không bị 429/418
-    binance_data.LIMITER.max_weight = a.max_weight
     print(f"Tải dữ liệu 1m {start.date()} → {end.date()} (+{a.warmup_days} ngày warm-up) cho {len(symbols)} cặp...")
     with ThreadPoolExecutor(max_workers=max(1, a.download_workers)) as ex:
         futs = {ex.submit(binance_data.download, sym, start - timedelta(days=a.warmup_days), end, print, a.source): sym
@@ -602,14 +628,15 @@ def main(argv=None):
                 print(f"  {sym}: không có dữ liệu, bỏ qua.")
                 continue
             print(f"  {sym}: xong ({sum(x['trades'] for x in res['summaries'])} lệnh)")
-            summaries += res["summaries"]
-            months += res["months"]
+            for g in sym_groups[sym]:  # một cặp có thể nằm ở cả 2 nhóm
+                summaries += [{"group": g, **r} for r in res["summaries"]]
+                months += [{"group": g, **r} for r in res["months"]]
             all_trades += res["trades"]
 
     if not summaries:
         print("Không có kết quả.")
         return 1
-    df_sum = pd.DataFrame(summaries).sort_values("return_pct", ascending=False)
+    df_sum = pd.DataFrame(summaries).sort_values(["group", "return_pct"], ascending=[True, False])
     df_sum.to_csv(out / "summary.csv", index=False, encoding="utf-8-sig")
     df_tr = pd.DataFrame(all_trades)
     num = df_tr.select_dtypes("number").columns
@@ -618,7 +645,7 @@ def main(argv=None):
     pd.DataFrame(months).to_csv(out / "monthly.csv", index=False, encoding="utf-8-sig")
 
     print("\n" + df_sum.drop(columns=["exit_reasons"]).to_string(index=False))
-    print(f"\nKết quả: {out}  (summary.csv, trades.csv, monthly.csv)")
+    print(f"\nKết quả: {out}  (summary.csv, trades.csv, monthly.csv{', universe.csv' if a.universe else ''})")
     return 0
 
 

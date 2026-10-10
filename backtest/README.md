@@ -20,6 +20,19 @@ python backtest/live_replay.py
 python backtest/live_replay.py --methods 4 --set M4_MAX_STOP_CAPITAL_PCT=0.08 M4_ATR_MULTIPLIER=2.0
 ```
 
+## Tự chọn 10 cặp: volume biến động mạnh nhất và vốn hoá lớn nhất
+
+```bash
+python backtest/live_replay.py --methods 4 --universe both --top 10 --start 2026-01-01 --end 2026-10-01
+```
+
+- Nhóm `volume`: trong 50 cặp Futures USDT có volume trung bình lớn nhất của khoảng backtest, chọn 10 cặp có volume ngày
+  biến động mạnh nhất (độ lệch chuẩn / trung bình). `--volume-metric total` để chọn theo tổng volume.
+- Nhóm `marketcap`: 10 coin vốn hoá lớn nhất theo CoinMarketCap, bỏ stablecoin và coin không có Futures USDT trên Binance.
+  Cần key miễn phí của CoinMarketCap (pro.coinmarketcap.com) trong `.env`: `CMC_API_KEY=...`. Không có key thì dùng CoinGecko.
+  API miễn phí chỉ có vốn hoá hiện tại, chưa phải vốn hoá tại ngày bắt đầu.
+- Chỉ lấy cặp đã niêm yết trước ngày bắt đầu. `universe.csv` ghi lại bảng xếp hạng; `summary.csv`, `monthly.csv` có cột `group`.
+
 Tuỳ chọn hay dùng: `--workers 4` (số cặp chạy song song, mặc định số nhân CPU - 1), `--download-workers 3`,
 `--max-weight 1200`, `--source vision` (tải zip, nhanh hơn API), `--fast` (nhanh ~4 lần, cùng kết quả).
 
