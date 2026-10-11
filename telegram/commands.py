@@ -418,6 +418,13 @@ def _do_paper_close(chat_id: str) -> str:
 def _process_update(upd: dict, offset_ref: list):
     """Xử lý 1 update: message hoặc callback_query."""
     offset_ref[0] = upd["update_id"] + 1
+    # Lệnh trade thật (/live..., nút lv:...) nếu token này cũng được thêm trên web /live
+    try:
+        from live.telegram_ctl import try_handle_env_update
+        if try_handle_env_update(upd):
+            return
+    except Exception:
+        pass
     chat_id = None
     text = ""
     callback_query_id = None

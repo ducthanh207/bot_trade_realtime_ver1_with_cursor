@@ -11,3 +11,6 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# Dữ liệu trade thật (API key mã hoá, trạng thái lệnh) — không bao giờ đưa lên git
+data/
