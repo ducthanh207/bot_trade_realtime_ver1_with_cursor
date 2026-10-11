@@ -1,6 +1,6 @@
 (function () {
   const INTERVAL_MS = 5000;
-  const ORDERS_REFRESH_MS = 1000;
+  const ORDERS_REFRESH_MS = 3000;
 
   let playbackIndex = null;
 
@@ -8,7 +8,7 @@
   function startKlinesTicker() {
     if (klinesTick) return;
     klinesTick = setInterval(function () {
-      if (playbackIndex === null && typeof fetchKlinesTv === "function") {
+      if (!document.hidden && playbackIndex === null && typeof fetchKlinesTv === "function") {
         fetchKlinesTv(false);
       }
     }, INTERVAL_MS);
@@ -1183,7 +1183,9 @@
   startKlinesTicker();
   setTimeout(resizeChartsTv, 50);
   fetchOrdersForMarkers();
-  setInterval(fetchOrdersForMarkers, ORDERS_REFRESH_MS);
+  setInterval(function () {
+    if (!document.hidden) fetchOrdersForMarkers();
+  }, ORDERS_REFRESH_MS);
 
   window.addEventListener("pagehide", function () {
     stopKlinesTicker();

@@ -8,8 +8,12 @@ _root = Path(__file__).resolve().parents[1]
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
+import copy
 import csv
+import gzip
 import io
+import threading
+import time
 from flask import Flask, jsonify, request, render_template, Response, redirect, url_for
 
 from bot.paper_fees import closed_trade_fee_entry_exit_usdt, linear_taker_fee_usdt
@@ -34,6 +38,40 @@ app = Flask(
     static_folder=str(_web_dir / "static"),
     static_url_path="/static",
 )
+
+# Nén gzip JSON/HTML/JS/CSS (danh sách lệnh có thể vài trăm KB) — tải nhanh hơn nhiều qua mạng chậm.
+_GZIP_TYPES = ("application/json", "text/html", "text/css", "application/javascript", "text/javascript")
+
+
+@app.before_request
+def _invalidate_status_cache_on_write():
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        _STATUS_CACHE["t"] = 0.0
+
+
+@app.after_request
+def _gzip_response(resp):
+    try:
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            _STATUS_CACHE["t"] = 0.0
+        if (
+            resp.direct_passthrough
+            or resp.status_code != 200
+            or "gzip" not in (request.headers.get("Accept-Encoding") or "").lower()
+            or resp.headers.get("Content-Encoding")
+            or resp.mimetype not in _GZIP_TYPES
+        ):
+            return resp
+        data = resp.get_data()
+        if len(data) < 1024:
+            return resp
+        resp.set_data(gzip.compress(data, compresslevel=5))
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers.add("Vary", "Accept-Encoding")
+    except Exception:
+        pass
+    return resp
+
 
 # Trang trade thật /live (đăng nhập bằng LIVE_ADMIN_PASSWORD). Lỗi ở đây không được làm hỏng web paper.
 _LIVE_WEB_OK = False
@@ -124,7 +162,22 @@ def _pct_change_bands_to_json(bands):
     }
 
 
+_STATUS_CACHE = {"t": 0.0, "d": None}
+_STATUS_LOCK = threading.Lock()
+_STATUS_TTL = 1.0
+
+
 def get_status():
+    """Trạng thái paper; tính lại tối đa 1 lần/giây (nhiều tab + /api/orders mỗi giây dùng chung)."""
+    with _STATUS_LOCK:
+        now = time.monotonic()
+        if _STATUS_CACHE["d"] is None or now - _STATUS_CACHE["t"] >= _STATUS_TTL:
+            _STATUS_CACHE["d"] = _compute_status()
+            _STATUS_CACHE["t"] = 0.0 if _STATUS_CACHE["d"].get("error") else now
+        return copy.copy(_STATUS_CACHE["d"])
+
+
+def _compute_status():
     try:
         from bot import state
         d = state.to_status_dict()
@@ -503,13 +556,7 @@ def api_status():
     # PNL_Open, Capital_Open, Lệnh_Open (real-time khi có lệnh mở)
     open_trade = d.get("paper_open_trade")
     if open_trade:
-        try:
-            from config import settings
-            client = _get_client()
-            df = client.get_klines(settings.SYMBOL, "1m", 1)
-            current_price = float(df["close"].iloc[-1]) if not df.empty else None
-        except Exception:
-            current_price = None
+        current_price = _current_price()
         if current_price is not None:
             entry = float(open_trade.get("entry_price") or 0)
             size = float(open_trade.get("size") or 0)
@@ -540,13 +587,7 @@ def api_status():
 
     open2 = d.get("paper2_open_trade")
     if open2:
-        try:
-            from config import settings
-            client = _get_client()
-            df = client.get_klines(settings.SYMBOL, "1m", 1)
-            current_price = float(df["close"].iloc[-1]) if not df.empty else None
-        except Exception:
-            current_price = None
+        current_price = _current_price()
         if current_price is not None:
             entry = float(open2.get("entry_price") or 0)
             size = float(open2.get("size") or 0)
@@ -608,13 +649,7 @@ def api_status():
         _ot = d.get(_p + "_open_trade")
         if _ot:
             if _px_cache is None:
-                try:
-                    from config import settings as _cfg34
-                    client = _get_client()
-                    dfp = client.get_klines(_cfg34.SYMBOL, "1m", 1)
-                    _px_cache = float(dfp["close"].iloc[-1]) if not dfp.empty else None
-                except Exception:
-                    _px_cache = None
+                _px_cache = _current_price()
             if _px_cache is not None:
                 _entry = float(_ot.get("entry_price") or 0)
                 _size = float(_ot.get("size") or 0)
@@ -1340,9 +1375,46 @@ def api_restore_choice():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+_CLIENT = None
+_CLIENT_LOCK = threading.Lock()
+
+
 def _get_client():
-    from exchange.binance_client import BinanceClient
-    return BinanceClient()
+    """Dùng chung 1 client (tạo mới mỗi request rất chậm: python-binance ping sàn mỗi lần khởi tạo)."""
+    global _CLIENT
+    with _CLIENT_LOCK:
+        if _CLIENT is None:
+            from exchange.binance_client import BinanceClient
+            _CLIENT = BinanceClient()
+        return _CLIENT
+
+
+_PRICE_CACHE = {"t": 0.0, "px": None}
+_PRICE_LOCK = threading.Lock()
+
+
+def _current_price(max_age: float = 2.0):
+    """Giá đóng cửa nến 1m mới nhất, cache ngắn để mọi tab/endpoint dùng chung 1 lần gọi Binance."""
+    from config import settings
+    with _PRICE_LOCK:
+        now = time.monotonic()
+        if _PRICE_CACHE["px"] is not None and now - _PRICE_CACHE["t"] < max_age:
+            return _PRICE_CACHE["px"]
+        px = None
+        try:
+            df = _get_client().get_klines(settings.SYMBOL, "1m", 1)
+            if not df.empty:
+                px = float(df["close"].iloc[-1])
+        except Exception:
+            px = None
+        if px is not None:
+            _PRICE_CACHE["px"] = px
+            _PRICE_CACHE["t"] = now
+            return px
+        # Lỗi mạng: dùng giá cũ nếu còn mới (< 60s) thay vì báo 0.
+        if _PRICE_CACHE["px"] is not None and now - _PRICE_CACHE["t"] < 60:
+            return _PRICE_CACHE["px"]
+        return None
 
 
 @app.route("/api/price")
@@ -1350,14 +1422,16 @@ def api_price():
     """Giá đóng cửa mới nhất (để tính unrealized PnL)."""
     try:
         from config import settings
-        client = _get_client()
-        df = client.get_klines(settings.SYMBOL, "1m", 1)
-        if df.empty:
+        price = _current_price()
+        if price is None:
             return jsonify({"price": 0.0})
-        price = float(df["close"].iloc[-1])
         return jsonify({"price": price, "symbol": settings.SYMBOL})
     except Exception as e:
         return jsonify({"price": 0.0, "error": str(e)})
+
+
+_KLINES_CACHE = {}
+_KLINES_TTL = 3.0
 
 
 @app.route("/api/klines")
@@ -1391,32 +1465,10 @@ def api_klines():
             "wma_rsi_period": _int_param("wma_rsi_period", 45, 2, 200),
             "atr_period": _int_param("atr_period", 14, 2, 200),
         }
-        def _int_param(name, default, lo, hi):
-            try:
-                v = int(request.args.get(name, default))
-                return max(lo, min(hi, v))
-            except (TypeError, ValueError):
-                return default
-        ind_params = {
-            "rsi_period": _int_param("rsi_period", 14, 2, 200),
-            "ema_period": _int_param("ema_period", 20, 2, 500),
-            "ema_rsi_period": _int_param("ema_rsi_period", 9, 2, 200),
-            "wma_rsi_period": _int_param("wma_rsi_period", 45, 2, 200),
-            "atr_period": _int_param("atr_period", 14, 2, 200),
-        }
-        def _int_param(name, default, lo, hi):
-            try:
-                v = int(request.args.get(name, default))
-                return max(lo, min(hi, v))
-            except (TypeError, ValueError):
-                return default
-        ind_params = {
-            "rsi_period": _int_param("rsi_period", 14, 2, 200),
-            "ema_period": _int_param("ema_period", 20, 2, 500),
-            "ema_rsi_period": _int_param("ema_rsi_period", 9, 2, 200),
-            "wma_rsi_period": _int_param("wma_rsi_period", 45, 2, 200),
-            "atr_period": _int_param("atr_period", 14, 2, 200),
-        }
+        cache_key = (interval, limit, lookback_trades, tuple(sorted(ind_params.items())))
+        cached = _KLINES_CACHE.get(cache_key)
+        if cached and time.monotonic() - cached[0] < _KLINES_TTL:
+            return jsonify(cached[1])
         client = _get_client()
         df = client.get_klines(settings.SYMBOL, interval, limit)
         if df.empty:
@@ -1431,41 +1483,44 @@ def api_klines():
                 }
             )
         df = add_indicators(df, **ind_params)
-        ohlc = []
-        for ts, row in df.iterrows():
-            t = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
-            ohlc.append({
-                "time": t,
-                "open": round(float(row["open"]), 4),
-                "high": round(float(row["high"]), 4),
-                "low": round(float(row["low"]), 4),
-                "close": round(float(row["close"]), 4),
-                "volume": round(float(row.get("volume", 0)), 0),
-            })
+        times = [ts.isoformat() if hasattr(ts, "isoformat") else str(ts) for ts in df.index]
+
+        def _col(name, nd):
+            return [round(float(v), nd) for v in df[name].tolist()]
+
+        vol = _col("volume", 0) if "volume" in df.columns else [0.0] * len(df)
+        ohlc = [
+            {"time": t, "open": o, "high": h, "low": lo_, "close": c, "volume": v}
+            for t, o, h, lo_, c, v in zip(
+                times, _col("open", 4), _col("high", 4), _col("low", 4), _col("close", 4), vol
+            )
+        ]
         indicators = {
-            "RSI": [round(float(row["RSI"]), 2) for _, row in df.iterrows()],
-            "EMA_RSI": [round(float(row["EMA_RSI"]), 2) for _, row in df.iterrows()],
-            "WMA_RSI": [round(float(row["WMA_RSI"]), 2) for _, row in df.iterrows()],
-            "ATR": [round(float(row["ATR"]), 4) for _, row in df.iterrows()],
-            "EMA": [round(float(row["EMA"]), 4) for _, row in df.iterrows()],
-            "WMA": [round(float(row["WMA"]), 4) for _, row in df.iterrows()],
-            "times": [ts.isoformat() if hasattr(ts, "isoformat") else str(ts) for ts in df.index],
+            "RSI": _col("RSI", 2),
+            "EMA_RSI": _col("EMA_RSI", 2),
+            "WMA_RSI": _col("WMA_RSI", 2),
+            "ATR": _col("ATR", 4),
+            "EMA": _col("EMA", 4),
+            "WMA": _col("WMA", 4),
+            "times": times,
         }
         bands = build_pct_change_avg_bands(
             df[["open", "high", "low", "close", "volume"]],
             lookback_trades=lookback_trades,
         )
         pct_json = _pct_change_bands_to_json(bands)
-        return jsonify(
-            {
-                "ohlc": ohlc,
-                "indicators": indicators,
-                "interval": interval,
-                "symbol": settings.SYMBOL,
-                "lookback_trades": lookback_trades,
-                "pct_change": pct_json,
-            }
-        )
+        payload = {
+            "ohlc": ohlc,
+            "indicators": indicators,
+            "interval": interval,
+            "symbol": settings.SYMBOL,
+            "lookback_trades": lookback_trades,
+            "pct_change": pct_json,
+        }
+        if len(_KLINES_CACHE) > 32:
+            _KLINES_CACHE.clear()
+        _KLINES_CACHE[cache_key] = (time.monotonic(), payload)
+        return jsonify(payload)
     except Exception as e:
         sym = ""
         try:
@@ -1566,13 +1621,7 @@ def _orders_json_for_slot(slot: int):
 
     current_price = None
     if open_trade:
-        try:
-            client = _get_client()
-            df = client.get_klines(settings.SYMBOL, "1m", 1)
-            if not df.empty:
-                current_price = float(df["close"].iloc[-1])
-        except Exception:
-            pass
+        current_price = _current_price()
     orders = []
     if open_trade:
         entry = float(open_trade.get("entry_price") or 0)

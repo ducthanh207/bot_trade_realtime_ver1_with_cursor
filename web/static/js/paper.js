@@ -5,7 +5,7 @@
   var apiBase = cfg.apiBase || "/api/paper";
 
   var INTERVAL_MS = 5000;
-  var ORDERS_REFRESH_MS = 1000;
+  var ORDERS_REFRESH_MS = 3000;
 
   var capitalInput = document.getElementById("initial_capital");
   var statusBadge = document.getElementById("statusBadge");
@@ -765,6 +765,14 @@
 
   refresh();
   checkRestorePending();
-  setInterval(refresh, INTERVAL_MS);
-  setInterval(fetchOrdersAndRefreshBar, ORDERS_REFRESH_MS);
+  // Tab ẩn thì không gọi API; mở lại tab thì cập nhật ngay.
+  setInterval(function () {
+    if (!document.hidden) refresh();
+  }, INTERVAL_MS);
+  setInterval(function () {
+    if (!document.hidden) fetchOrdersAndRefreshBar();
+  }, ORDERS_REFRESH_MS);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) refresh();
+  });
 })();

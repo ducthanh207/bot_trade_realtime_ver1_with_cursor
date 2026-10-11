@@ -317,8 +317,14 @@
 
   bind();
   refreshAll();
-  setInterval(refreshOverview, 5000);
   setInterval(function () {
+    if (!document.hidden) refreshOverview();
+  }, 5000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) refreshOverview();
+  });
+  setInterval(function () {
+    if (document.hidden) return;
     refreshConfig().catch(function () {});
     if (!$("#tabTrades").hidden) loadTrades().catch(function () {});
     if (!$("#tabEvents").hidden) loadEvents().catch(function () {});
