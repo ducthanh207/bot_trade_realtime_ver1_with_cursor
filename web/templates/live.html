@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Trade thật – Dashboard{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/live.css') }}">{% endblock %}
+{% block content %}
+<section class="live-wrap" role="main">
+  <header class="lv-top">
+    <div class="lv-switch-box">
+      <span class="lv-label">Trade thật</span>
+      <button type="button" id="btnSwitch" class="lv-switch">—</button>
+      <span class="lv-muted" id="switchHint">Tắt = không mở lệnh mới; lệnh đang mở vẫn được quản lý thoát.</span>
+    </div>
+    <div class="lv-top-right">
+      <span class="lv-pill" id="tickInfo">Engine: —</span>
+      <span class="lv-pill" id="windowInfo"></span>
+      <button type="button" id="btnCloseAll" class="lv-btn lv-danger">Đóng tất cả vị thế</button>
+      <a class="lv-btn" href="{{ url_for('live.logout') }}">Đăng xuất</a>
+    </div>
+  </header>
+  <div class="lv-error-bar" id="errorBar" hidden></div>
+
+  <div class="lv-cards" id="accountCards"></div>
+
+  <section class="lv-panel">
+    <div class="lv-panel-head">
+      <h3>Bot đang cấu hình</h3>
+      <button type="button" class="lv-btn lv-primary" id="btnNewBot">+ Thêm bot</button>
+    </div>
+    <div class="lv-table-wrap">
+      <table class="lv-table" id="botsTable">
+        <thead><tr>
+          <th>Bot</th><th>Tài khoản</th><th>Cặp / chiến lược</th><th>Trạng thái</th>
+          <th>Vốn bot</th><th>PnL tổng</th><th>Hôm nay</th><th>Vị thế</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <nav class="lv-tabs" role="tablist">
+    <button type="button" class="lv-tab active" data-tab="tabBot">Bot (cặp coin × chiến lược)</button>
+    <button type="button" class="lv-tab" data-tab="tabAcc">Tài khoản sàn</button>
+    <button type="button" class="lv-tab" data-tab="tabTg">Telegram</button>
+    <button type="button" class="lv-tab" data-tab="tabTrades">Lịch sử lệnh</button>
+    <button type="button" class="lv-tab" data-tab="tabEvents">Nhật ký</button>
+  </nav>
+
+  <!-- BOT -->
+  <section class="lv-panel lv-tabpane" id="tabBot">
+    <h3 id="botFormTitle">Thêm bot</h3>
+    <form id="botForm" class="lv-form" autocomplete="off">
+      <input type="hidden" name="id">
+      <label>Tên bot<input name="name" placeholder="vd BTC PP4"></label>
+      <label>Tài khoản sàn<select name="account_id" required></select></label>
+      <label>Cặp coin<input name="symbol" placeholder="BTCUSDT" required></label>
+      <label>Chiến lược<select name="method">
+        {% for k, v in methods.items() %}<option value="{{ k }}" {% if k == '4' %}selected{% endif %}>{{ v }}</option>{% endfor %}
+      </select></label>
+      <label>Vốn phân bổ (USDT)<input name="capital" type="number" min="1" step="any" value="50"></label>
+      <label>Đòn bẩy<input name="leverage" type="number" min="1" max="125" step="1" value="20"></label>
+      <label>% vốn mỗi lệnh<input name="wallet_pct_ui" type="number" min="1" max="100" step="0.5" value="30"></label>
+      <label>Stop dự phòng trên sàn<select name="exchange_stop">
+        <option value="trail">Theo trailing stop (khuyên dùng)</option>
+        <option value="hard">Chỉ mức lỗ tối đa (hard stop)</option>
+        <option value="off">Không đặt (chỉ bot tự đóng)</option>
+      </select></label>
+      <fieldset class="lv-checks"><legend>Gửi thông báo tới</legend><div id="botTgChecks"></div>
+        <small class="lv-muted">Không chọn = gửi tới mọi kết nối Telegram có bật "báo lệnh".</small></fieldset>
+      <label class="lv-inline"><input type="checkbox" name="reset_capital"> Đặt lại vốn bot = vốn phân bổ (khi không có lệnh mở)</label>
+      <div class="lv-form-actions">
+        <button type="submit" class="lv-btn lv-primary">Lưu bot</button>
+        <button type="button" class="lv-btn" id="btnBotCancel">Huỷ</button>
+      </div>
+      <p class="lv-muted">Bot mới ở trạng thái <b>Dừng</b>. Bấm <b>Chạy</b> trong bảng để bắt đầu. Bot chỉ đặt lệnh thật khi:
+        công tắc Trade thật BẬT + tài khoản BẬT + bot đang Chạy. Size lệnh = vốn bot × % vốn × đòn bẩy (giống paper), làm tròn theo bước khối lượng của sàn.</p>
+    </form>
+  </section>
+
+  <!-- TÀI KHOẢN -->
+  <section class="lv-panel lv-tabpane" id="tabAcc" hidden>
+    <div class="lv-table-wrap"><table class="lv-table" id="accTable">
+      <thead><tr><th>Tên</th><th>Sàn / môi trường</th><th>API key</th><th>Kiểm tra</th><th>Trạng thái</th><th></th></tr></thead>
+      <tbody></tbody></table></div>
+    <h3 id="accFormTitle">Thêm tài khoản sàn</h3>
+    <form id="accForm" class="lv-form" autocomplete="off">
+      <input type="hidden" name="id">
+      <label>Tên<input name="name" placeholder="vd Binance chính" required></label>
+      <label>Sàn<select name="exchange">{% for k, v in exchanges.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
+      <label>Môi trường<select name="env">{% for k, v in envs.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
+      <label>API key<input name="api_key" placeholder="dán API key" autocomplete="off"></label>
+      <label>API secret<input name="api_secret" type="password" placeholder="dán secret" autocomplete="new-password"></label>
+      <div class="lv-form-actions">
+        <button type="submit" class="lv-btn lv-primary">Lưu tài khoản</button>
+        <button type="button" class="lv-btn" id="btnAccCancel">Huỷ</button>
+      </div>
+      <p class="lv-muted">Khi sửa, để trống key/secret = giữ key cũ. Key được mã hoá trên VPS, web chỉ hiện 4 ký tự đầu/cuối.
+        Trên Binance chỉ bật quyền <b>Enable Futures</b> (không bật Withdraw) và giới hạn IP = IP VPS.</p>
+    </form>
+  </section>
+
+  <!-- TELEGRAM -->
+  <section class="lv-panel lv-tabpane" id="tabTg" hidden>
+    <div class="lv-table-wrap"><table class="lv-table" id="tgTable">
+      <thead><tr><th>Tên</th><th>Token</th><th>Chat ID</th><th>Báo lệnh</th><th>Báo giờ</th><th>Báo lỗi</th><th>Điều khiển</th><th></th></tr></thead>
+      <tbody></tbody></table></div>
+    <h3 id="tgFormTitle">Thêm kết nối Telegram</h3>
+    <form id="tgForm" class="lv-form" autocomplete="off">
+      <input type="hidden" name="id">
+      <label>Tên<input name="name" placeholder="vd Bot của tôi" required></label>
+      <label>Token bot (từ @BotFather)<input name="token" placeholder="123456:ABC..." autocomplete="off"></label>
+      <label>Chat ID<input name="chat_id" placeholder="vd 916843176" required></label>
+      <fieldset class="lv-checks"><legend>Tuỳ chọn</legend>
+        <label class="lv-inline"><input type="checkbox" name="enabled" checked> Bật</label>
+        <label class="lv-inline"><input type="checkbox" name="notify_trades" checked> Báo mở / đóng lệnh</label>
+        <label class="lv-inline"><input type="checkbox" name="notify_hourly" checked> Báo cáo PnL mỗi giờ</label>
+        <label class="lv-inline"><input type="checkbox" name="notify_errors" checked> Báo lỗi</label>
+        <label class="lv-inline"><input type="checkbox" name="allow_control" checked> Cho phép điều khiển (/live)</label>
+      </fieldset>
+      <div class="lv-form-actions">
+        <button type="submit" class="lv-btn lv-primary">Lưu kết nối</button>
+        <button type="button" class="lv-btn" id="btnTgCancel">Huỷ</button>
+      </div>
+      <p class="lv-muted">Lấy Chat ID: nhắn bất kỳ cho bot, rồi mở <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> và xem <code>chat.id</code>.
+        Trong Telegram gõ <b>/live</b> để mở bảng nút bấm bật/tắt.</p>
+    </form>
+  </section>
+
+  <!-- LỆNH -->
+  <section class="lv-panel lv-tabpane" id="tabTrades" hidden>
+    <div class="lv-panel-head"><h3>Lịch sử lệnh thật</h3><a class="lv-btn" href="/api/live/trades.csv">Tải CSV</a></div>
+    <div class="lv-table-wrap"><table class="lv-table" id="tradesTable">
+      <thead><tr><th>Bot</th><th>Hướng</th><th>Vào</th><th>Ra</th><th>Giá vào</th><th>Giá ra</th><th>Khối lượng</th><th>PnL</th><th>Phí</th><th>Lý do</th></tr></thead>
+      <tbody></tbody></table></div>
+  </section>
+
+  <!-- NHẬT KÝ -->
+  <section class="lv-panel lv-tabpane" id="tabEvents" hidden>
+    <h3>Nhật ký</h3>
+    <ul class="lv-events" id="eventsList"></ul>
+  </section>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>window.LIVE_CSRF = {{ csrf|tojson }}; window.LIVE_METHODS = {{ methods|tojson }}; window.LIVE_ENVS = {{ envs|tojson }};</script>
+<script src="{{ url_for('static', filename='js/live.js') }}"></script>
+{% endblock %}

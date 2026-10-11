@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Đăng nhập – Trade thật{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/live.css') }}">{% endblock %}
+{% block content %}
+<section class="live-wrap live-login" role="main">
+  <div class="lv-card">
+    <h2>Trade thật — đăng nhập</h2>
+    {% if not pw_set %}
+      <p class="lv-warn">Chưa đặt mật khẩu quản trị. Trên VPS thêm dòng sau vào file <code>.env</code> rồi khởi động lại bot:</p>
+      <pre>LIVE_ADMIN_PASSWORD=mat_khau_dai_cua_ban</pre>
+      <p class="lv-muted">Trang này điều khiển lệnh thật trên sàn nên luôn cần mật khẩu.</p>
+    {% else %}
+      <form method="post">
+        <label for="pw">Mật khẩu</label>
+        <input type="password" id="pw" name="password" autocomplete="current-password" autofocus required>
+        <button type="submit" class="lv-btn lv-primary">Đăng nhập</button>
+      </form>
+      {% if error %}<p class="lv-error">{{ error }}</p>{% endif %}
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Điểm chạy chính: Paper trade (vốn ảo, giá thật từ Binance).
-- Binance chỉ dùng để lấy klines, không đặt lệnh thật.
-- Web: số vốn ban đầu, ngày bắt đầu, Kích hoạt / Tạm dừng / Dừng.
-- Telegram: đọc và gửi thông tin paper trade.
-Sau này trade thật: đổi run_paper_loop -> run_live_loop và cấu hình.
+Điểm chạy chính:
+- Paper trade (vốn ảo, giá thật từ Binance) — PP1–PP4 trên SYMBOL, như trước.
+- Trade thật (live/engine.py) — chạy song song, cấu hình hoàn toàn trên web /live
+  (tài khoản sàn, Telegram, bot = cặp coin × chiến lược). Mặc định công tắc trade thật TẮT.
+- Web: paper + /live. Telegram: lệnh paper (.env) + bảng điều khiển /live.
 """
 
 import sys
@@ -53,6 +53,15 @@ def main():
         daemon=True,
     )
     tg_thread.start()
+
+    # Trade thật: lỗi khởi động ở đây không được làm dừng paper trade
+    try:
+        from live.engine import start_engine_thread
+        from live.telegram_ctl import start_poller_manager
+        start_engine_thread()
+        start_poller_manager()
+    except Exception as e:
+        print("[LIVE] Không khởi động được engine trade thật:", e)
 
     try:
         run_paper_loop(client, notify_func=notify, status_func=status_callback)

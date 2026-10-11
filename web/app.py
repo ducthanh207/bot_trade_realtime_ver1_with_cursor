@@ -35,6 +35,15 @@ app = Flask(
     static_url_path="/static",
 )
 
+# Trang trade thật /live (đăng nhập bằng LIVE_ADMIN_PASSWORD). Lỗi ở đây không được làm hỏng web paper.
+_LIVE_WEB_OK = False
+try:
+    from web.live_routes import init_app as _init_live_web
+    _init_live_web(app)
+    _LIVE_WEB_OK = True
+except Exception as _live_err:
+    print("[LIVE] Không bật được trang /live:", _live_err)
+
 
 def _serialize(obj):
     if hasattr(obj, "isoformat"):
@@ -177,6 +186,8 @@ def page_chart():
 
 @app.route("/real")
 def page_real():
+    if _LIVE_WEB_OK:
+        return redirect(url_for("live.page"))
     return _html_no_cache("real.html", nav_active="real")
 
 @app.route("/paper3")
