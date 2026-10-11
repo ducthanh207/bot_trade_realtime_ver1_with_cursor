@@ -1,0 +1,19 @@
+# /etc/fail2ban/jail.local — khoá IP dò mật khẩu SSH / web hoặc spam vượt rate limit
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+# Thêm IP nhà bạn vào đây để không bao giờ tự khoá mình (cách nhau bằng dấu cách)
+ignoreip = 127.0.0.1/8 ::1
+
+[sshd]
+enabled = true
+
+[nginx-http-auth]
+enabled = true
+logpath = /var/log/nginx/error.log
+
+[nginx-limit-req]
+enabled  = true
+logpath  = /var/log/nginx/error.log
+maxretry = 10
