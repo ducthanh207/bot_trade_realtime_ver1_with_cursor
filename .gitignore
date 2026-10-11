@@ -11,3 +11,7 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# Backtest local
+backtest/data_cache/
+backtest/results/
