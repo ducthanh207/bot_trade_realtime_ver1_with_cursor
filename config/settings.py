@@ -100,3 +100,31 @@ M4_ADX_EXHAUSTION = float(os.environ.get("M4_ADX_EXHAUSTION", "45.0"))
 M4_ADX_EXHAUSTION_SIZE = float(os.environ.get("M4_ADX_EXHAUSTION_SIZE", "0.5"))
 # Exit B confirm bars (giống PP3)
 M4_EARLY_EXIT_B_CONFIRM_BARS = int(os.environ.get("M4_EARLY_EXIT_B_CONFIRM_BARS", "2"))
+
+# ---------- [2026-11-01] Method 4: nhận diện giai đoạn thị trường + cắt lỗ sớm ----------
+# Tất cả MẶC ĐỊNH TẮT → bot đang chạy không đổi hành vi cho tới khi bật trong .env.
+# Giải thích chi tiết: docs/PP4_REGIME_EARLY_CUT.md
+def _env_bool(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).lower() in ("1", "true", "yes")
+
+
+# Bộ phân loại giai đoạn (ER Kaufman + độ dốc EMA50) trên N nến 4H đã đóng: UP / DOWN / RANGE
+M4_REGIME_ENABLED = _env_bool("M4_REGIME_ENABLED")
+M4_REGIME_LOOKBACK = int(os.environ.get("M4_REGIME_LOOKBACK", "20"))           # N nến 4H
+M4_REGIME_ER_TREND = float(os.environ.get("M4_REGIME_ER_TREND", "0.2"))        # ER >= ngưỡng → có trend
+M4_REGIME_SLOPE_ATR = float(os.environ.get("M4_REGIME_SLOPE_ATR", "1.0"))      # |EMA50 dốc| trong N nến, tính theo số lần ATR 4H
+# Lệnh "chặt" = vào khi đi ngang hoặc ngược trend → trailing dùng hệ số này thay vì 2.5→2.2
+M4_TIGHT_ATR_MULTIPLIER = float(os.environ.get("M4_TIGHT_ATR_MULTIPLIER", "1.5"))
+M4_RANGE_SKIP_ENTRY = _env_bool("M4_RANGE_SKIP_ENTRY")            # (E) bỏ hẳn lệnh khi RANGE
+M4_COUNTER_TREND_BLOCK = _env_bool("M4_COUNTER_TREND_BLOCK")      # chặn LONG khi DOWN / SHORT khi UP
+# (A) Thoát khi tín hiệu thất bại: nến 1H đóng vượt đáy (LONG) / đỉnh (SHORT) nến 4H tín hiệu ± buffer×ATR
+M4_INVALIDATION_EXIT = _env_bool("M4_INVALIDATION_EXIT")
+M4_INVALIDATION_HOURS = float(os.environ.get("M4_INVALIDATION_HOURS", "12.0"))
+M4_INVALIDATION_BUFFER_ATR = float(os.environ.get("M4_INVALIDATION_BUFFER_ATR", "0.3"))
+# (B) Dừng theo thời gian: tới mốc 4H sau ít nhất N giờ mà lệnh vẫn lỗ → đóng
+M4_TIME_STOP = _env_bool("M4_TIME_STOP")
+M4_TIME_STOP_HOURS = float(os.environ.get("M4_TIME_STOP_HOURS", "4.0"))
+# A và B chỉ áp cho lệnh "chặt" (RANGE / ngược trend). false → áp cho mọi lệnh PP4
+M4_EARLY_CUT_ONLY_TIGHT = _env_bool("M4_EARLY_CUT_ONLY_TIGHT", "true")
+# (D) Grace mượt: hệ số ATR giảm dần tuyến tính 2.5→2.2 trong M4_ATR_GRACE_HOURS thay vì tụt một lần
+M4_SMOOTH_GRACE = _env_bool("M4_SMOOTH_GRACE")

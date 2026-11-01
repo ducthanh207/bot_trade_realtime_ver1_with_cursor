@@ -35,6 +35,7 @@ from strategy.indicators import add_indicators_m3
 from strategy.risk import m3_adx_zone, m3_streak_multiplier, m3_atr_multiplier, m4_adx_zone
 from strategy.signals import m4_entry_1h_confirm, m4_entry_rsi_extreme_block
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
+from strategy.regime import classify_regime, m4_regime_entry_decision, m4_apply_regime_to_payload
 
 _tz_app = getattr(settings, "GMT7", timezone.utc)
 
@@ -124,6 +125,8 @@ class MarketContext:
         self.in_4h_window = in_4h_window
         self._row_m3 = None
         self._row_m3_done = False
+        self._df_4h_m3_closed = None  # [2026-11-01] nến 4H đã đóng + indicator M3, dùng cho classify_regime
+        self._regime = None
 
     @property
     def ok(self) -> bool:
@@ -161,9 +164,17 @@ class MarketContext:
                     swing_lookback=getattr(settings, "M3_SWING_LOOKBACK", 6),
                 )
                 self._row_m3 = _ensure_series(df_4h_m3.iloc[-2]) if len(df_4h_m3) >= 2 else None
+                self._df_4h_m3_closed = df_4h_m3.iloc[:-1]  # bỏ nến 4H đang chạy
             except Exception:
                 self._row_m3 = None
         return self._row_m3
+
+    def regime_info(self) -> dict:
+        """[2026-11-01] Giai đoạn thị trường (UP/DOWN/RANGE) trên nến 4H đã đóng — tính một lần mỗi vòng."""
+        if self._regime is None:
+            self.row_m3()
+            self._regime = classify_regime(self._df_4h_m3_closed)
+        return self._regime
 
 
 def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
@@ -306,6 +317,14 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
         if getattr(settings, "M4_REQUIRE_1H_CONFIRM", True) and not m4_entry_1h_confirm(side, df_1h):
             return None
 
+    # [2026-11-01] PP4: nhận diện giai đoạn (mặc định tắt). RANGE / ngược trend → bỏ lệnh hoặc đánh dấu lệnh "chặt"
+    m4_regime, m4_tight = {}, False
+    if method == METHOD_4 and getattr(settings, "M4_REGIME_ENABLED", False):
+        m4_regime = mkt.regime_info()
+        allow_regime, m4_tight = m4_regime_entry_decision(side, m4_regime.get("regime"))
+        if not allow_regime:
+            return None
+
     # Method 3/4 entry filters
     m3_size_mult = 1.0
     if method in (METHOD_3, METHOD_4) and row_m3 is not None:
@@ -390,6 +409,9 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
     elif method == METHOD_4:
         open_payload["atr_multiplier_override"] = atr_mult_now
         open_payload["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
+        # [2026-11-01] lưu giai đoạn + đỉnh/đáy nến tín hiệu; lệnh "chặt" đổi hệ số ATR và stop ban đầu
+        if getattr(settings, "M4_REGIME_ENABLED", False) or getattr(settings, "M4_INVALIDATION_EXIT", False):
+            m4_apply_regime_to_payload(open_payload, side, m4_regime, m4_tight, row_closed)
     # Chỉ phương pháp dùng %change (PP2) mới snapshot dải — PP1/PP3 không đụng pct_change
     if uses_pct_change_bands(method):
         bands_at_entry = build_pct_change_avg_bands_series(df_4h_raw, lookback_trades=lb_trades)

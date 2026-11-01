@@ -48,6 +48,12 @@ from strategy.risk import (
 )
 from strategy.exit_engine import compute_exit_candidates, pick_best_exit
 from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4
+from strategy.regime import (
+    classify_regime,
+    m4_regime_entry_decision,
+    m4_apply_regime_to_payload,
+    m4_invalidation_hit,
+)
 
 H1 = pd.Timedelta(hours=1)
 H4 = pd.Timedelta(hours=4)
@@ -157,6 +163,7 @@ class MarketData:
                 return None
             m3 = self._m3(raw4)
             row_m3 = m3.iloc[-1] if len(m3) and m3.index[-1] == t_closed else None
+            regime = classify_regime(m3) if settings.M4_REGIME_ENABLED and row_m3 is not None else {}
             raw1 = self._past(self.df1h_raw, t - H1)
             ind1 = add_indicators(raw1)
             if len(ind1) >= 2 and ind1.index[-1] == t - H1:
@@ -168,6 +175,7 @@ class MarketData:
             return {
                 "row_closed": ind4.iloc[-1], "prev_row_closed": ind4.iloc[-2], "row_m3": row_m3,
                 "df_1h": df_1h, "df_4h_raw": self._with_forming(raw4, t, open_px),
+                "regime": regime,  # [2026-11-01]
             }
         if t_closed not in self.ind4.index or t_prev not in self.ind4.index:
             return None
@@ -178,11 +186,15 @@ class MarketData:
             df_1h = pd.concat([closed1, last])
         else:
             df_1h = pd.DataFrame()
+        regime = {}
+        if settings.M4_REGIME_ENABLED and t_closed in self.ind4_m3.index:
+            regime = classify_regime(self.ind4_m3.loc[:t_closed])  # [2026-11-01]
         return {
             "row_closed": self.ind4.loc[t_closed], "prev_row_closed": self.ind4.loc[t_prev],
             "row_m3": self.ind4_m3.loc[t_closed] if t_closed in self.ind4_m3.index else None,
             "df_1h": df_1h,
             "df_4h_raw": self._with_forming(self._past(self.df4_raw, t_closed), t, open_px),
+            "regime": regime,
         }
 
 
@@ -302,7 +314,7 @@ class SlotSim:
                 self.cb_heavy_until = now + timedelta(hours=settings.M3_CB_HEAVY_BARS * 4)
 
     # ----- Vào lệnh (giống paper_loop, nhánh "not open_trade and running and in_4h_window") -----
-    def try_enter(self, md: MarketData, t, entry_px, prev_row_closed, row_closed, row_m3, df_1h):
+    def try_enter(self, md: MarketData, t, entry_px, prev_row_closed, row_closed, row_m3, df_1h, regime_info=None):
         method = self.method
         if method in (METHOD_3, METHOD_4):
             if self.cb_heavy_until and t < self.cb_heavy_until:
@@ -320,6 +332,13 @@ class SlotSim:
             if m4_entry_rsi_extreme_block(side, row_closed.get("RSI")):
                 return
             if getattr(settings, "M4_REQUIRE_1H_CONFIRM", True) and not m4_entry_1h_confirm(side, df_1h):
+                return
+
+        # [2026-11-01] PP4 nhận diện giai đoạn — giống bot/slot_engine.step_slot
+        m4_regime, m4_tight = regime_info or {}, False
+        if method == METHOD_4 and settings.M4_REGIME_ENABLED:
+            allow_regime, m4_tight = m4_regime_entry_decision(side, m4_regime.get("regime"))
+            if not allow_regime:
                 return
 
         size_mult = 1.0
@@ -386,6 +405,8 @@ class SlotSim:
             ot["atr_multiplier_override"] = atr_mult_now
         if method == METHOD_4:
             ot["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
+            if settings.M4_REGIME_ENABLED or settings.M4_INVALIDATION_EXIT:  # [2026-11-01]
+                m4_apply_regime_to_payload(ot, side, m4_regime, m4_tight, row_closed)
         self.open_trade = ot
         self.balance -= fee_in
         self._prepare_risk()
@@ -414,6 +435,19 @@ def run_symbol(md: MarketData, start, methods, capital, leverage, wallet_pct, lo
             ot = s.open_trade
             cands = s.step_layer1(md, i)
 
+            # [2026-11-01] (A) PP4 thoát khi tín hiệu thất bại: live xét mỗi vòng nến 1H vừa đóng →
+            # backtest xét ở phút đầu mỗi giờ (mốc 4H đã được compute_exit_candidates xét bên dưới).
+            if ctx is None and s.method == METHOD_4 and settings.M4_INVALIDATION_EXIT and t.minute == 0:
+                h1_t = t - H1
+                if h1_t in md.df1h_raw.index and m4_invalidation_hit(ot, h1_t, float(md.df1h_raw.at[h1_t, "close"])):
+                    entry, size, side = float(ot["entry_price"]), float(ot["size"]), ot["side"]
+                    px = float(o[i])
+                    pnl_raw = (px - entry) * size if side == "LONG" else (entry - px) * size
+                    pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss_from_capital(ot))
+                    px = px_lim if px_lim is not None else px
+                    fee_out = linear_taker_fee_usdt(size, px, float(settings.TAKER_FEE))
+                    cands.append((t, pnl_lim - fee_out, px, "M4_INVALIDATION"))
+
             if ctx is not None:
                 entry_4h_ts = ot.get("entry_4h_ts")
                 allow_early = entry_4h_ts is None or (t - H4) != entry_4h_ts
@@ -438,7 +472,8 @@ def run_symbol(md: MarketData, start, methods, capital, leverage, wallet_pct, lo
         if ctx is not None:
             for s in slots:
                 if s.open_trade is None:
-                    s.try_enter(md, t, float(o[i]), ctx["prev_row_closed"], ctx["row_closed"], ctx["row_m3"], ctx["df_1h"])
+                    s.try_enter(md, t, float(o[i]), ctx["prev_row_closed"], ctx["row_closed"], ctx["row_m3"], ctx["df_1h"],
+                                ctx.get("regime"))
 
         if any(s.open_trade is not None for s in slots):
             i += 1
