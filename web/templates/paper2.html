@@ -34,6 +34,7 @@
       <button type="button" class="btn-rules" id="btnSaveStrategy">Lưu chiến lược</button>
     </div>
   </header>
+  {% with bt_slot=2, bt_api="/api/paper2" %}{% include "_backtest_panel.html" %}{% endwith %}
   <aside class="orders-panel">
     <div class="paper-charts-row" aria-label="Biểu đồ paper 2">
       <div class="paper-chart-box">

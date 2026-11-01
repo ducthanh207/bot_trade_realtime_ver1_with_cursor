@@ -23,3 +23,13 @@ Mọi tùy chọn đều mặc định TẮT, nên bot đang chạy không đổ
 - Trước đây nút Chạy backtest ở trang Paper 3/Paper 4 luôn gửi `load_to_state: true`: xoá lịch sử, lệnh đang mở và vốn
   của paper thật, rồi thay bằng kết quả backtest.
 - Giờ mặc định chỉ hiện kết quả. Server chỉ ghi đè khi request gửi cả `load_to_state: true` và `confirm_overwrite: true`.
+
+## 2026-11-01 — Backtest trên web chạy giống bot live, cho cả PP1–PP4
+
+- Nút "Chạy backtest" (Paper 1, 2, 3, 4) giờ dùng chung engine với `backtest/live_replay.py`
+  (`backtest/web_backtest.py`): phát lại từng phút đúng hàm chiến lược của bot, cùng tham số `.env`, chỉ dùng nến đã đóng.
+  Trước đây web dùng `bot/paper3_backtest.py` (chỉ PP3/PP4): quét stop trên nến 1H, đọc cả nến chưa đóng
+  (nhìn trước tương lai) và tải cả nến đang chạy → cùng khoảng ngày chạy ở hai lúc khác nhau ra kết quả khác nhau.
+- Chạy nền trong process Python riêng (không làm chậm bot), web hỏi kết quả mỗi 2 giây; hiện bảng lệnh, lý do thoát, DD max.
+- Dữ liệu 1m cache theo tháng trong `backtest/data_cache/` → lần chạy sau nhanh hơn, cùng khoảng ngày luôn cùng kết quả.
+- Khung backtest dùng chung: `web/templates/_backtest_panel.html`. Không ghi gì vào paper trade thật.

@@ -29,6 +29,7 @@
       <button type="button" class="btn-rules" id="btnCapitalRules">Cập nhật quy tắc vốn</button>
     </div>
   </header>
+  {% with bt_slot=1, bt_api="/api/paper" %}{% include "_backtest_panel.html" %}{% endwith %}
   <aside class="orders-panel">
     <div class="paper-charts-row" aria-label="Biểu đồ paper">
       <div class="paper-chart-box">

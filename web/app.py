@@ -1007,155 +1007,67 @@ def api_paper2_strategy():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# [2026-11-01] Backtest trên web cho cả 4 phương pháp, dùng chung engine với backtest/live_replay.py
+# (phát lại từng phút đúng logic bot live, không nhìn trước). Chạy nền: POST tạo job → GET /api/backtest/job/<id>.
+# KHÔNG ghi gì vào paper trade thật.
+def _start_web_backtest(slot: int):
+    import bot.state as state
+    from config import settings as _cfg
+    from backtest import web_backtest
+
+    data = request.get_json(silent=True) or {}
+    getters = {
+        1: (state.get_paper_leverage, state.get_paper_wallet_pct),
+        2: (state.get_paper2_leverage, state.get_paper2_wallet_pct),
+        3: (state.get_paper3_leverage, state.get_paper3_wallet_pct),
+        4: (state.get_paper4_leverage, state.get_paper4_wallet_pct),
+    }
+    get_lev, get_wct = getters[slot]
+    start_str = str(data.get("start_date") or "")
+    end_str = str(data.get("end_date") or "") or None
+    try:
+        datetime.strptime(start_str, "%Y-%m-%d")
+        if end_str:
+            datetime.strptime(end_str, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "Ngày không hợp lệ (dùng YYYY-MM-DD)"}), 400
+    initial_capital = float(data.get("initial_capital") or 1000)
+    leverage = float(data.get("leverage") or get_lev() or _cfg.LEVERAGE)
+    wallet_pct = float(data.get("wallet_pct") or get_wct() or _cfg.WALLET_PCT)
+    wallet_pct = wallet_pct / 100.0 if wallet_pct > 1 else wallet_pct
+    symbol = str(data.get("symbol") or getattr(_cfg, "SYMBOL", "BTCUSDT")).upper()
+    job_id = web_backtest.submit(
+        method=str(slot), symbol=symbol, start=start_str, end=end_str,
+        initial_capital=initial_capital, leverage=leverage, wallet_pct=wallet_pct,
+        lookback_trades=int(getattr(_cfg, "LOOKBACK_TRADES", 15)),
+    )
+    return jsonify({"ok": True, "job_id": job_id, "symbol": symbol, "leverage": leverage, "wallet_pct": wallet_pct})
+
+
+@app.route("/api/paper/backtest", methods=["POST"])
+def api_paper1_backtest():
+    return _start_web_backtest(1)
+
+
+@app.route("/api/paper2/backtest", methods=["POST"])
+def api_paper2_backtest():
+    return _start_web_backtest(2)
+
+
 @app.route("/api/paper3/backtest", methods=["POST"])
 def api_paper3_backtest():
-    try:
-        import bot.state as state  # [2026-11-01] sửa lỗi "name 'state' is not defined" khi bấm Chạy backtest
-        from datetime import datetime, timezone, timedelta
-        from bot.paper3_backtest import run_backtest
-        from config import settings as _cfg
-        data = request.get_json(silent=True) or {}
-
-        start_str = data.get("start_date", "")
-        end_str = data.get("end_date", "")
-        initial_capital = float(data.get("initial_capital", 1000))
-        leverage = float(data.get("leverage") or state.get_paper3_leverage() or _cfg.LEVERAGE)
-        wallet_pct_raw = float(data.get("wallet_pct") or state.get_paper3_wallet_pct() or _cfg.WALLET_PCT)
-        wallet_pct = wallet_pct_raw / 100.0 if wallet_pct_raw > 1 else wallet_pct_raw
-        taker_fee = float(getattr(_cfg, "TAKER_FEE", 0.0004))
-        # [2026-11-01] Mặc định KHÔNG ghi kết quả backtest đè lên paper trade thật (trước đây luôn ghi đè:
-        # xoá lịch sử, lệnh đang mở và vốn của paper). Chỉ ghi khi gửi cả load_to_state và confirm_overwrite = true.
-        load_to_state = data.get("load_to_state") is True and data.get("confirm_overwrite") is True
-
-        tz7 = timezone(timedelta(hours=7))
-        try:
-            start_dt = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=tz7)
-        except Exception:
-            return jsonify({"error": "start_date không hợp lệ (dùng YYYY-MM-DD)"}), 400
-        try:
-            end_dt = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=tz7) if end_str else datetime.now(tz7)
-            end_dt = end_dt.replace(hour=23, minute=59, second=59)
-        except Exception:
-            end_dt = datetime.now(tz7)
-
-        symbol = getattr(_cfg, "SYMBOL", "BTCUSDT")
-        result = run_backtest(
-            symbol=symbol,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            initial_capital=initial_capital,
-            leverage=leverage,
-            wallet_pct=wallet_pct,
-            taker_fee=taker_fee,
-        )
-
-        if "error" in result:
-            return jsonify({"error": result["error"]}), 400
-
-        if load_to_state:
-            state.paper3_clear_history()
-            state.set_paper3_initial_capital(initial_capital)
-            state.set_paper3_balance(result["final_balance"])
-            for t in result["trades"]:
-                state.append_paper3_trade(t)
-            if result["trades"]:
-                state.set_paper3_last_trade(result["trades"][-1])
-            if state.get_paper3_status() == "stopped":
-                state.paper3_start(result["final_balance"])
-                state.set_paper3_initial_capital(initial_capital)
-            try:
-                from bot.paper_persistence import save_paper_state
-                save_paper_state()
-            except Exception:
-                pass
-
-        return jsonify({
-            "ok": True,
-            "total_trades": result["total_trades"],
-            "wins": result["wins"],
-            "losses": result["losses"],
-            "winrate": result["winrate"],
-            "total_pnl": result["total_pnl"],
-            "final_balance": result["final_balance"],
-            "loaded": load_to_state,
-        })
-    except Exception as e:
-        import traceback
-        return jsonify({"error": str(e), "detail": traceback.format_exc()}), 500
+    return _start_web_backtest(3)
 
 
 @app.route("/api/paper4/backtest", methods=["POST"])
 def api_paper4_backtest():
-    try:
-        import bot.state as state  # [2026-11-01] sửa lỗi "name 'state' is not defined" khi bấm Chạy backtest
-        from datetime import datetime, timezone, timedelta
-        from bot.paper3_backtest import run_backtest
-        from config import settings as _cfg
-        data = request.get_json(silent=True) or {}
+    return _start_web_backtest(4)
 
-        start_str = data.get("start_date", "")
-        end_str = data.get("end_date", "")
-        initial_capital = float(data.get("initial_capital", 1000))
-        leverage = float(data.get("leverage") or state.get_paper4_leverage() or _cfg.LEVERAGE)
-        wallet_pct_raw = float(data.get("wallet_pct") or state.get_paper4_wallet_pct() or _cfg.WALLET_PCT)
-        wallet_pct = wallet_pct_raw / 100.0 if wallet_pct_raw > 1 else wallet_pct_raw
-        taker_fee = float(getattr(_cfg, "TAKER_FEE", 0.0004))
-        # [2026-11-01] Mặc định KHÔNG ghi kết quả backtest đè lên paper trade thật (trước đây luôn ghi đè:
-        # xoá lịch sử, lệnh đang mở và vốn của paper). Chỉ ghi khi gửi cả load_to_state và confirm_overwrite = true.
-        load_to_state = data.get("load_to_state") is True and data.get("confirm_overwrite") is True
 
-        tz7 = timezone(timedelta(hours=7))
-        try:
-            start_dt = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=tz7)
-        except Exception:
-            return jsonify({"error": "start_date không hợp lệ (dùng YYYY-MM-DD)"}), 400
-        try:
-            end_dt = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=tz7) if end_str else datetime.now(tz7)
-            end_dt = end_dt.replace(hour=23, minute=59, second=59)
-        except Exception:
-            end_dt = datetime.now(tz7)
-
-        symbol = getattr(_cfg, "SYMBOL", "BTCUSDT")
-        result = run_backtest(
-            symbol=symbol,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            initial_capital=initial_capital,
-            leverage=leverage,
-            wallet_pct=wallet_pct,
-            taker_fee=taker_fee,
-            method="4",
-        )
-
-        if "error" in result:
-            return jsonify({"error": result["error"]}), 400
-
-        if load_to_state:
-            state.paper4_clear_history()
-            state.set_paper4_initial_capital(initial_capital)
-            state.set_paper4_balance(result["final_balance"])
-            for t in result["trades"]:
-                state.append_paper4_trade(t)
-            if result["trades"]:
-                state.set_paper4_last_trade(result["trades"][-1])
-            if state.get_paper4_status() == "stopped":
-                state.paper4_start(result["final_balance"])
-                state.set_paper4_initial_capital(initial_capital)
-            _save_paper_state_silent()
-
-        return jsonify({
-            "ok": True,
-            "total_trades": result["total_trades"],
-            "wins": result["wins"],
-            "losses": result["losses"],
-            "winrate": result["winrate"],
-            "total_pnl": result["total_pnl"],
-            "final_balance": result["final_balance"],
-            "loaded": load_to_state,
-        })
-    except Exception as e:
-        import traceback
-        return jsonify({"error": str(e), "detail": traceback.format_exc()}), 500
+@app.route("/api/backtest/job/<job_id>")
+def api_backtest_job(job_id):
+    from backtest import web_backtest
+    return jsonify(web_backtest.status(job_id))
 
 
 @app.route("/api/paper2/close", methods=["POST"])
