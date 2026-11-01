@@ -69,7 +69,10 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
     low = row_1m["low"]
     if str(open_trade.get("trading_method", "")) == "4":
         # M4: grace hết hạn theo thời gian nến đang xét (không dùng override cố định lúc mở lệnh)
-        mult = _m4_mult_at(open_trade.get("entry_time"), getattr(row_1m, "name", None))
+        # [2026-11-01] qua m4_trailing_multiplier: thêm lệnh "chặt" (regime) và grace mượt (M4_SMOOTH_GRACE).
+        # Khi các tùy chọn mới đều tắt, kết quả y hệt _m4_mult_at cũ.
+        from strategy.regime import m4_trailing_multiplier
+        mult = m4_trailing_multiplier(open_trade, getattr(row_1m, "name", None))
     else:
         mult = open_trade.get("atr_multiplier_override") or settings.ATR_MULTIPLIER
     trail_dist = atr * mult

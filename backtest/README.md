@@ -20,6 +20,10 @@ python backtest/live_replay.py
 python backtest/live_replay.py --methods 4 --set M4_MAX_STOP_CAPITAL_PCT=0.08 M4_ATR_MULTIPLIER=2.0
 ```
 
+**[2026-11-01] PP4 nhận diện giai đoạn + cắt lỗ sớm** (mặc định tắt). Bật bằng `--set`, ví dụ
+`--set M4_REGIME_ENABLED=true M4_INVALIDATION_EXIT=true M4_TIME_STOP=true M4_SMOOTH_GRACE=true`.
+Bộ lệnh so sánh đầy đủ: `docs/PP4_REGIME_EARLY_CUT.md`.
+
 ## Tự chọn 10 cặp: volume biến động mạnh nhất và vốn hoá lớn nhất
 
 ```bash

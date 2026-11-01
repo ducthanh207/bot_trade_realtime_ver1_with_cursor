@@ -204,6 +204,24 @@ def compute_exit_candidates(
                 fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
                 candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT_B"))
 
+    # ---------- [2026-11-01] Phương pháp 4: cắt lỗ sớm (mặc định tắt, xem strategy/regime.py) ----------
+    if method == METHOD_4:
+        from strategy.regime import m4_invalidation_hit, m4_time_stop_hit
+        pnl_now = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
+        # (A) Tín hiệu thất bại: xét nến 1H vừa đóng (iloc[-2]) ở MỌI vòng lặp, không chờ mốc 4H
+        if df_1h is not None and not df_1h.empty and len(df_1h) >= 3 and "close" in df_1h.columns:
+            if m4_invalidation_hit(open_trade, df_1h.index[-2], df_1h["close"].iloc[-2]):
+                pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_now, max_loss)
+                exit_px = px_lim if px_lim is not None else exit_px_ref
+                fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
+                candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "M4_INVALIDATION"))
+        # (B) Dừng theo thời gian: chỉ ở mốc 4H (cửa sổ 5 phút đầu nến 4H)
+        if apply_4h_layer and m4_time_stop_hit(open_trade, exit_time_ts, pnl_now):
+            pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_now, max_loss)
+            exit_px = px_lim if px_lim is not None else exit_px_ref
+            fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
+            candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "M4_TIME_STOP"))
+
     # ---------- Phương pháp 2: TP theo %change ----------
     if method == METHOD_2 and df_4h_raw is not None and not df_4h_raw.empty:
         bands = build_pct_change_avg_bands_series(df_4h_raw, lookback_trades=lookback_trades)
