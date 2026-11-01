@@ -155,3 +155,5 @@ sudo systemctl status bot-live
 **Đảm bảo bot chạy trên VPS:** dùng systemd (chạy một lần `bash scripts/setup-systemd.sh`). Bot sẽ tự chạy khi VPS bật và tự restart nếu bị lỗi. Kiểm tra: `sudo systemctl status bot-live`; xem log: `journalctl -u bot-live -f`.
 
 Sau khi sửa code: trên local commit → push; trên VPS: `cd ~/Bot_VPS_Realtime_ver1_11_3_26 && git pull && sudo systemctl restart bot-live` (hoặc dùng `bash scripts/deploy.sh`).
+
+**Tự động deploy:** cài một lần theo `docs/TU-DONG-DEPLOY.md`, sau đó mỗi lần merge PR vào `main` GitHub Actions sẽ tự pull, restart và kiểm tra bot (tự quay về code cũ nếu lỗi).
