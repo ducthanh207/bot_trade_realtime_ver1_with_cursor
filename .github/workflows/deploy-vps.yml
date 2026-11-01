@@ -1,0 +1,90 @@
+# Tự động deploy lên VPS mỗi khi có code mới trên main (merge PR).
+# Cách cài: docs/TU-DONG-DEPLOY.md
+#
+# Secrets cần có (GitHub > Settings > Secrets and variables > Actions):
+#   VPS_HOST      IP hoặc tên miền VPS (đổi VPS chỉ cần sửa secret này)
+#   VPS_USER      user SSH, thường là root
+#   VPS_SSH_KEY   private key riêng cho deploy (toàn bộ nội dung file, kể cả dòng BEGIN/END)
+# Không bắt buộc:
+#   VPS_PORT      cổng SSH, mặc định 22
+#   VPS_HOST_KEY  nội dung /etc/ssh/ssh_host_ed25519_key.pub trên VPS (chống giả mạo VPS)
+#   VPS_BOT_DIR   thư mục bot, mặc định ~/Bot_VPS_Realtime_ver1_11_3_26
+
+name: Deploy VPS
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:          # chỉ sửa tài liệu thì không restart bot
+      - '**.md'
+      - 'docs/**'
+      - 'idea_for_update/**'
+  workflow_dispatch: {}    # nút "Run workflow" để deploy tay
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false   # không cắt ngang một lần deploy đang chạy
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kiểm tra secrets
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          missing=""
+          [ -n "$VPS_HOST" ] || missing="$missing VPS_HOST"
+          [ -n "$VPS_USER" ] || missing="$missing VPS_USER"
+          [ -n "$VPS_SSH_KEY" ] || missing="$missing VPS_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Thiếu secret:$missing. Xem docs/TU-DONG-DEPLOY.md"
+            exit 1
+          fi
+
+      - name: Chuẩn bị SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+        run: |
+          PORT="${VPS_PORT:-22}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ "$PORT" = "22" ]; then HOSTNAME_ENTRY="$VPS_HOST"; else HOSTNAME_ENTRY="[$VPS_HOST]:$PORT"; fi
+          if [ -n "$VPS_HOST_KEY" ]; then
+            # host key cố định: an toàn nhất
+            echo "$HOSTNAME_ENTRY $(echo "$VPS_HOST_KEY" | awk '{print $1" "$2}')" > ~/.ssh/known_hosts
+          else
+            echo "::warning::Chưa đặt VPS_HOST_KEY, đang tin host key lấy trực tiếp từ VPS."
+            ssh-keyscan -p "$PORT" -T 15 "$VPS_HOST" > ~/.ssh/known_hosts 2>/dev/null
+            [ -s ~/.ssh/known_hosts ] || { echo "::error::Không kết nối được cổng SSH $PORT của $VPS_HOST (firewall? sai IP?)"; exit 1; }
+          fi
+
+      - name: Deploy (pull + restart + kiểm tra)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_BOT_DIR: ${{ secrets.VPS_BOT_DIR }}
+        run: |
+          BOT_DIR_ARG=""
+          [ -n "$VPS_BOT_DIR" ] && BOT_DIR_ARG="BOT_DIR=$(printf '%q' "$VPS_BOT_DIR")"
+          ssh -i ~/.ssh/deploy_key -p "${VPS_PORT:-22}" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=20 \
+            -o ServerAliveInterval=15 \
+            "$VPS_USER@$VPS_HOST" "$BOT_DIR_ARG BRANCH=main bash -s" < scripts/auto_deploy.sh
+
+      - name: Dọn key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
