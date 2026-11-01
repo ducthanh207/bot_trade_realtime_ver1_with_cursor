@@ -141,7 +141,7 @@
         start_date: startDate,
         end_date: endDate,
         initial_capital: capital,
-        load_to_state: true
+        load_to_state: false  // [2026-11-01] chỉ xem kết quả, không ghi đè paper thật
       })
     })
     .then(function(r) { return r.json(); })
@@ -154,7 +154,7 @@
       } else {
         res.style.color = "#9cf";
         res.textContent = [
-          "Xong! " + d.total_trades + " lệnh",
+          "Xong (chỉ xem, không đổi paper thật)! " + d.total_trades + " lệnh",
           "W/L: " + d.wins + "/" + d.losses,
           "Winrate: " + d.winrate + "%",
           "PnL: " + (d.total_pnl >= 0 ? "+" : "") + d.total_pnl.toFixed(2),

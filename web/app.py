@@ -1023,7 +1023,9 @@ def api_paper3_backtest():
         wallet_pct_raw = float(data.get("wallet_pct") or state.get_paper3_wallet_pct() or _cfg.WALLET_PCT)
         wallet_pct = wallet_pct_raw / 100.0 if wallet_pct_raw > 1 else wallet_pct_raw
         taker_fee = float(getattr(_cfg, "TAKER_FEE", 0.0004))
-        load_to_state = bool(data.get("load_to_state", True))
+        # [2026-11-01] Mặc định KHÔNG ghi kết quả backtest đè lên paper trade thật (trước đây luôn ghi đè:
+        # xoá lịch sử, lệnh đang mở và vốn của paper). Chỉ ghi khi gửi cả load_to_state và confirm_overwrite = true.
+        load_to_state = data.get("load_to_state") is True and data.get("confirm_overwrite") is True
 
         tz7 = timezone(timedelta(hours=7))
         try:
@@ -1098,7 +1100,9 @@ def api_paper4_backtest():
         wallet_pct_raw = float(data.get("wallet_pct") or state.get_paper4_wallet_pct() or _cfg.WALLET_PCT)
         wallet_pct = wallet_pct_raw / 100.0 if wallet_pct_raw > 1 else wallet_pct_raw
         taker_fee = float(getattr(_cfg, "TAKER_FEE", 0.0004))
-        load_to_state = bool(data.get("load_to_state", True))
+        # [2026-11-01] Mặc định KHÔNG ghi kết quả backtest đè lên paper trade thật (trước đây luôn ghi đè:
+        # xoá lịch sử, lệnh đang mở và vốn của paper). Chỉ ghi khi gửi cả load_to_state và confirm_overwrite = true.
+        load_to_state = data.get("load_to_state") is True and data.get("confirm_overwrite") is True
 
         tz7 = timezone(timedelta(hours=7))
         try:

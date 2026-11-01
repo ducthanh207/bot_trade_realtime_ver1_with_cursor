@@ -17,3 +17,9 @@ Mọi tùy chọn đều mặc định TẮT, nên bot đang chạy không đổ
 
 - `web/app.py`: `/api/paper3/backtest` và `/api/paper4/backtest` dùng `state` nhưng chưa import → lỗi
   `name 'state' is not defined`. Thêm `import bot.state as state` trong hai hàm. Lỗi có từ trước, không do bản cập nhật PP4.
+
+## 2026-11-01 — Nút "Chạy backtest" trên web không còn ghi đè paper trade thật
+
+- Trước đây nút Chạy backtest ở trang Paper 3/Paper 4 luôn gửi `load_to_state: true`: xoá lịch sử, lệnh đang mở và vốn
+  của paper thật, rồi thay bằng kết quả backtest.
+- Giờ mặc định chỉ hiện kết quả. Server chỉ ghi đè khi request gửi cả `load_to_state: true` và `confirm_overwrite: true`.
