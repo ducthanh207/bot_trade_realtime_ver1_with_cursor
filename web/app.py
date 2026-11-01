@@ -1010,6 +1010,7 @@ def api_paper2_strategy():
 @app.route("/api/paper3/backtest", methods=["POST"])
 def api_paper3_backtest():
     try:
+        import bot.state as state  # [2026-11-01] sửa lỗi "name 'state' is not defined" khi bấm Chạy backtest
         from datetime import datetime, timezone, timedelta
         from bot.paper3_backtest import run_backtest
         from config import settings as _cfg
@@ -1084,6 +1085,7 @@ def api_paper3_backtest():
 @app.route("/api/paper4/backtest", methods=["POST"])
 def api_paper4_backtest():
     try:
+        import bot.state as state  # [2026-11-01] sửa lỗi "name 'state' is not defined" khi bấm Chạy backtest
         from datetime import datetime, timezone, timedelta
         from bot.paper3_backtest import run_backtest
         from config import settings as _cfg

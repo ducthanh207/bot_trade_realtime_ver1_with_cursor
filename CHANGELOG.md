@@ -12,3 +12,8 @@ Mọi tùy chọn đều mặc định TẮT, nên bot đang chạy không đổ
 - (E) Bỏ lệnh khi RANGE — `M4_RANGE_SKIP_ENTRY`; chặn lệnh ngược trend — `M4_COUNTER_TREND_BLOCK`.
 - Backtest `backtest/live_replay.py` mô phỏng đầy đủ các tùy chọn trên; bật bằng `--set`.
 - File mới: `strategy/regime.py`, `tests/test_m4_regime.py`, `docs/PP4_REGIME_EARLY_CUT.md`.
+
+## 2026-11-01 — Sửa lỗi nút "Chạy backtest" trên web (PP3/PP4)
+
+- `web/app.py`: `/api/paper3/backtest` và `/api/paper4/backtest` dùng `state` nhưng chưa import → lỗi
+  `name 'state' is not defined`. Thêm `import bot.state as state` trong hai hàm. Lỗi có từ trước, không do bản cập nhật PP4.
