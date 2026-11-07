@@ -114,7 +114,9 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
 # và không import lại run_live.py (multiprocessing "spawn" sẽ làm vậy). Mỗi lúc chỉ 1 job chạy, các job sau xếp hàng.
 _jobs: dict = {}
 _lock = threading.Lock()
-_run_lock = threading.Lock()
+# [2026-11-07] Cho phép vài backtest chạy song song (mỗi tab Paper một job), quá số này thì xếp hàng
+MAX_PARALLEL = 3
+_run_lock = threading.BoundedSemaphore(MAX_PARALLEL)
 JOB_TTL_SEC = 3600
 JOB_TIMEOUT_SEC = 1800
 ROOT = Path(__file__).resolve().parents[1]
@@ -170,6 +172,8 @@ if __name__ == "__main__":
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     try:
+        from backtest import binance_data as _bd
+        _bd.LIMITER.max_weight = 600  # 3 job song song x 600 < 2400 weight/phút Binance, chừa phần cho bot
         res = run_web_backtest(**json.loads(sys.argv[1]))
     except Exception as e:
         res = {"error": str(e), "detail": traceback.format_exc()[-3000:]}
