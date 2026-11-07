@@ -101,6 +101,7 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
         "losses": n - wins,
         "winrate": round(wins / n * 100, 1) if n else 0.0,
         "total_pnl": round(float(slot.balance) - float(initial_capital), 4),
+        "initial_capital": float(initial_capital),
         "final_balance": round(float(slot.balance), 4),
         "max_drawdown_pct": round(max_dd, 2),
         "exit_reasons": reasons,

@@ -1227,6 +1227,23 @@ def api_backtest_job(job_id):
     return jsonify(web_backtest.status(job_id))
 
 
+@app.route("/api/backtest/job/<job_id>/xlsx")
+def api_backtest_job_xlsx(job_id):
+    """[2026-11-07] Tải file Excel (thống kê + chi tiết lệnh) của một job backtest đã xong."""
+    from backtest import web_backtest
+    from backtest.xlsx_export import backtest_result_xlsx
+
+    d = web_backtest.status(job_id)
+    if d.get("state") != "done" or d.get("error"):
+        return jsonify({"error": d.get("error") or "Backtest chưa xong"}), 404
+    data = backtest_result_xlsx(d)
+    day = lambda v: str(v or "")[:10]
+    name = f"backtest_PP{d.get('method')}_{d.get('symbol')}_{day(d.get('start'))}_{day(d.get('end'))}.xlsx"
+    resp = app.response_class(data, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    resp.headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    return resp
+
+
 @app.route("/api/paper2/close", methods=["POST"])
 def api_paper2_close():
     try:
