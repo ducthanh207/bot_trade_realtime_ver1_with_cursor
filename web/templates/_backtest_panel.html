@@ -1,4 +1,4 @@
-{# [2026-11-01] Khung backtest dùng chung cho Paper 1–4. Cần biến bt_slot (1–4) và bt_api ("/api/paper", "/api/paper2"...). #}
+{# [2026-11-01] Khung backtest dùng chung cho Paper 1–5. Cần biến bt_slot (1–5) và bt_api ("/api/paper", "/api/paper2"...). #}
 <div class="backtest-panel">
   <span class="backtest-title">Backtest lịch sử PP{{ bt_slot }} — phát lại từng phút đúng logic bot live (cùng tham số .env, chỉ nến đã đóng). Chỉ xem, không đổi paper thật.</span>
   <label>Cặp</label>
@@ -48,7 +48,7 @@
       var c = x.profit >= 0 ? "#6c6" : "#f66";
       return "<tr><td>" + x.side + "</td><td>" + t(x.entry_time) + "</td><td>" + n(x.entry_price, 2) +
         "</td><td>" + t(x.exit_time) + "</td><td>" + n(x.exit_price, 2) + "</td><td style='color:" + c + "'>" +
-        n(x.profit, 2) + "</td><td>" + n(x.capital_after, 2) + "</td><td>" + x.exit_reason + "</td></tr>";
+        n(x.profit, 2) + "</td><td>" + n(x.capital_after, 2) + "</td><td>" + x.exit_reason + (x.cycle ? " · " + x.cycle + (x.cycle_wide ? " (nới)" : "") : "") + "</td></tr>";
     }).join("");
     box.innerHTML = "<table><tr><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th>" +
       "<th>Profit</th><th>Cap After</th><th>Reason</th></tr>" + rows + "</table>";

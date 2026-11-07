@@ -194,7 +194,7 @@ def _compute_status():
         if d.get("paper2_open_trade"):
             d["paper2_open_trade"] = _serialize(d["paper2_open_trade"])
         d["paper2_trades"] = _serialize(d.get("paper2_trades", []))
-        for _p in ("paper3", "paper4"):
+        for _p in ("paper3", "paper4", "paper5"):
             d[_p + "_started_at"] = str(d[_p + "_started_at"]) if d.get(_p + "_started_at") else None
             if d.get(_p + "_last_trade"):
                 d[_p + "_last_trade"] = _serialize(d[_p + "_last_trade"])
@@ -251,6 +251,11 @@ def page_paper3():
 @app.route("/paper4")
 def page_paper4():
     return _html_no_cache("paper4.html", nav_active="paper4")
+
+
+@app.route("/paper5")
+def page_paper5():
+    return _html_no_cache("paper5.html", nav_active="paper5")
 
 
 def _save_paper_state_silent():
@@ -416,6 +421,152 @@ def api_paper4_close():
     state.set_paper4_last_trade(open_trade)
     state.set_paper4_open_trade(None)
     state.set_paper4_balance(balance + profit)
+    _save_paper_state_silent()
+    return jsonify({"ok": True, "profit": round(profit, 2), "exit_price": exit_px})
+
+
+# ---------- [2026-11-07] Paper trade 5 (PP5 = PP4 + chu kỳ nến ngày): API giống Paper 4 ----------
+@app.route("/api/paper5/hidden-trade-keys", methods=["POST"])
+def api_paper5_hidden_trade_keys():
+    try:
+        raw, err = _hidden_trade_keys_from_request()
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        from bot import state as _st
+        _st.set_paper5_hidden_trade_keys(raw)
+        _save_paper_state_silent()
+        return jsonify({"ok": True, "paper5_hidden_trade_keys": _st.get_paper5_hidden_trade_keys()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/paper5/start", methods=["POST"])
+def api_paper5_start():
+    data = request.get_json(silent=True) or {}
+    try:
+        capital = float(data.get("initial_capital", 0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "Vốn không hợp lệ"}), 400
+    if capital <= 0:
+        return jsonify({"error": "Vốn phải > 0"}), 400
+    import bot.state as state
+    state.paper5_start(capital)
+    _save_paper_state_silent()
+    return jsonify({"ok": True, "paper5_status": state.get_paper5_status(), "paper5_balance": state.get_paper5_balance()})
+
+
+@app.route("/api/paper5/set-initial-capital", methods=["POST"])
+def api_paper5_set_initial_capital():
+    data = request.get_json(silent=True) or {}
+    try:
+        capital = float(data.get("initial_capital", 0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "Vốn không hợp lệ"}), 400
+    if capital <= 0:
+        return jsonify({"error": "Vốn phải > 0"}), 400
+    import bot.state as state
+    state.set_paper5_initial_capital(capital)
+    state.set_paper5_balance(capital)
+    _save_paper_state_silent()
+    return jsonify({"ok": True, "paper5_initial_capital": capital, "paper5_balance": state.get_paper5_balance()})
+
+
+@app.route("/api/paper5/clear-history", methods=["POST"])
+def api_paper5_clear_history():
+    import bot.state as state
+    state.paper5_clear_history()
+    _save_paper_state_silent()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/paper5/pause", methods=["POST"])
+def api_paper5_pause():
+    import bot.state as state
+    state.paper5_pause()
+    _save_paper_state_silent()
+    return jsonify({"ok": True, "paper5_status": state.get_paper5_status()})
+
+
+@app.route("/api/paper5/stop", methods=["POST"])
+def api_paper5_stop():
+    import bot.state as state
+    state.paper5_stop()
+    _save_paper_state_silent()
+    return jsonify({"ok": True, "paper5_status": state.get_paper5_status()})
+
+
+@app.route("/api/paper5/capital-rules", methods=["POST"])
+def api_paper5_capital_rules():
+    import bot.state as state
+    data = request.get_json(silent=True) or {}
+    leverage = data.get("leverage")
+    wallet_pct = data.get("wallet_pct")
+    errors = []
+    if leverage is not None:
+        try:
+            lv = float(leverage)
+            if lv < 1 or lv > 125:
+                errors.append("Đòn bẩy phải 1–125")
+            else:
+                state.set_paper5_leverage(lv)
+        except (ValueError, TypeError):
+            errors.append("Đòn bẩy không hợp lệ")
+    if wallet_pct is not None:
+        try:
+            wp = float(wallet_pct)
+            if wp <= 0 or wp > 100:
+                errors.append("% vốn phải 1–100")
+            else:
+                state.set_paper5_wallet_pct(wp / 100.0 if wp > 1 else wp)
+        except (ValueError, TypeError):
+            errors.append("% vốn không hợp lệ")
+    if errors:
+        return jsonify({"error": "; ".join(errors)}), 400
+    _save_paper_state_silent()
+    return jsonify({"ok": True, "paper5_leverage": state.get_paper5_leverage(), "paper5_wallet_pct": state.get_paper5_wallet_pct()})
+
+
+@app.route("/api/paper5/close", methods=["POST"])
+def api_paper5_close():
+    import bot.state as state
+    data = request.get_json(silent=True) or {}
+    trade_id = data.get("trade_id")
+    open_trade = state.get_paper5_open_trade()
+    if open_trade is None:
+        return jsonify({"error": "Không có lệnh mở"}), 400
+    if trade_id and str(open_trade.get("id")) != str(trade_id):
+        return jsonify({"error": "ID lệnh không khớp"}), 400
+    # Đóng thủ công theo giá thị trường hiện tại (fallback giá vào nếu không lấy được giá)
+    entry = float(open_trade.get("entry_price") or 0)
+    size = float(open_trade.get("size") or 0)
+    side = str(open_trade.get("side", "")).upper()
+    exit_px = entry
+    try:
+        from config import settings as _cfg
+        client = _get_client()
+        df = client.get_klines(_cfg.SYMBOL, "1m", 1)
+        if not df.empty:
+            exit_px = float(df["close"].iloc[-1])
+    except Exception:
+        pass
+    pnl_raw = (exit_px - entry) * size if side == "LONG" else (entry - exit_px) * size
+    try:
+        from config import settings as _cfg2
+        fee_out = linear_taker_fee_usdt(size, exit_px, float(getattr(_cfg2, "TAKER_FEE", 0.0004)))
+    except Exception:
+        fee_out = 0.0
+    profit = pnl_raw - fee_out
+    balance = state.get_paper5_balance()
+    open_trade["exit_time"] = datetime.now(_tz_app)
+    open_trade["exit_price"] = exit_px
+    open_trade["exit_reason"] = "manual_close"
+    open_trade["profit"] = profit
+    open_trade["capital_before"] = balance
+    open_trade["capital_after"] = balance + profit
+    state.append_paper5_trade(open_trade)
+    state.set_paper5_last_trade(open_trade)
+    state.set_paper5_open_trade(None)
+    state.set_paper5_balance(balance + profit)
     _save_paper_state_silent()
     return jsonify({"ok": True, "profit": round(profit, 2), "exit_price": exit_px})
 
@@ -645,7 +796,7 @@ def api_status():
 
     # Paper 3 + 4: PNL_Open / Capital_Open / display rules / replay initial
     _px_cache = None
-    for _p in ("paper3", "paper4"):
+    for _p in ("paper3", "paper4", "paper5"):
         _ot = d.get(_p + "_open_trade")
         if _ot:
             if _px_cache is None:
@@ -1021,6 +1172,7 @@ def _start_web_backtest(slot: int):
         2: (state.get_paper2_leverage, state.get_paper2_wallet_pct),
         3: (state.get_paper3_leverage, state.get_paper3_wallet_pct),
         4: (state.get_paper4_leverage, state.get_paper4_wallet_pct),
+        5: (state.get_paper5_leverage, state.get_paper5_wallet_pct),
     }
     get_lev, get_wct = getters[slot]
     start_str = str(data.get("start_date") or "")
@@ -1062,6 +1214,11 @@ def api_paper3_backtest():
 @app.route("/api/paper4/backtest", methods=["POST"])
 def api_paper4_backtest():
     return _start_web_backtest(4)
+
+
+@app.route("/api/paper5/backtest", methods=["POST"])
+def api_paper5_backtest():
+    return _start_web_backtest(5)
 
 
 @app.route("/api/backtest/job/<job_id>")
@@ -1508,7 +1665,11 @@ def _orders_json_for_slot(slot: int):
     if status.get("error"):
         return None, status["error"]
     slot = int(slot)
-    if slot == 4:
+    if slot == 5:
+        open_trade = status.get("paper5_open_trade")
+        trades = list(status.get("paper5_trades") or [])
+        leverage = state.get_paper5_leverage() or getattr(settings, "LEVERAGE", 20.0)
+    elif slot == 4:
         open_trade = status.get("paper4_open_trade")
         trades = list(status.get("paper4_trades") or [])
         leverage = state.get_paper4_leverage() or getattr(settings, "LEVERAGE", 20.0)
@@ -1526,7 +1687,9 @@ def _orders_json_for_slot(slot: int):
         leverage = state.get_paper_leverage() or getattr(settings, "LEVERAGE", 20.0)
     chronological = list(trades)
     taker_fee = float(getattr(settings, "TAKER_FEE", 0.0004))
-    if slot == 4:
+    if slot == 5:
+        init_cap = float(status.get("paper5_initial_capital") or 0)
+    elif slot == 4:
         init_cap = float(status.get("paper4_initial_capital") or 0)
     elif slot == 3:
         init_cap = float(status.get("paper3_initial_capital") or 0)

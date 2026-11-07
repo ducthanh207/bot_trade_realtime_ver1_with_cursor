@@ -73,6 +73,10 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
         # Khi các tùy chọn mới đều tắt, kết quả y hệt _m4_mult_at cũ.
         from strategy.regime import m4_trailing_multiplier
         mult = m4_trailing_multiplier(open_trade, getattr(row_1m, "name", None))
+    elif str(open_trade.get("trading_method", "")) == "5":
+        # [2026-11-07] PP5: như PP4 gốc; lệnh vào lúc đi ngang dùng hệ số nới cố định
+        from strategy.daily_cycle import m5_trailing_multiplier
+        mult = m5_trailing_multiplier(open_trade, getattr(row_1m, "name", None))
     else:
         mult = open_trade.get("atr_multiplier_override") or settings.ATR_MULTIPLIER
     trail_dist = atr * mult

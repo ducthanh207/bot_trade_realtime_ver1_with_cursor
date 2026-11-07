@@ -17,7 +17,7 @@ from config import settings
 from bot.paper_fees import linear_taker_fee_usdt
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 from strategy.signals import long_exit, long_exit_early, short_exit, short_exit_early
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5
 from strategy.risk import (
     check_atr_trailing,
     limit_pnl_and_exit_price,
@@ -116,7 +116,7 @@ def compute_exit_candidates(
 
         # Method 4: hard stop — thoát ngay khi giá chạm mức lỗ max_loss (không chỉ giới hạn PnL trên giấy)
         hard_stop_px = None
-        if method == METHOD_4 and size > 0:
+        if method in (METHOD_4, METHOD_5) and size > 0:
             hard_stop_px = entry - max_loss / size if side == "LONG" else entry + max_loss / size
 
         liq_px = entry + (maint - margin) / size if side == "LONG" else entry - (maint - margin) / size
@@ -172,7 +172,7 @@ def compute_exit_candidates(
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EXIT"))
 
     # Method 4: tầng early thường được thay bằng Exit B (RSI vượt ngưỡng + slope N nến) bên dưới
-    if apply_4h_layer and allow_early_exit and sig_early and method != METHOD_4:
+    if apply_4h_layer and allow_early_exit and sig_early and method not in (METHOD_4, METHOD_5):
         pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
         take = True
         if method == METHOD_2:
@@ -184,19 +184,27 @@ def compute_exit_candidates(
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT"))
 
     # ---------- Phương pháp 3/4: Exit B (tang manh — nguong + slope) ----------
-    if method in (METHOD_3, METHOD_4) and df_4h_raw is not None and not df_4h_raw.empty:
+    if method in (METHOD_3, METHOD_4, METHOD_5) and df_4h_raw is not None and not df_4h_raw.empty:
         from strategy.signals import long_early_exit_strong_b, short_early_exit_strong_b
         from config import settings as _s3
-        if method == METHOD_4:
+        if method in (METHOD_4, METHOD_5):
             confirm_bars = getattr(_s3, "M4_EARLY_EXIT_B_CONFIRM_BARS", 2)
         else:
             confirm_bars = getattr(_s3, "M3_EARLY_EXIT_B_CONFIRM_BARS", 2)
-        i_last = len(df_4h_raw) - 1
+        df_b, i_last = df_4h_raw, len(df_4h_raw) - 1
+        if method == METHOD_5:
+            # [2026-11-07] PP5: Exit B đã sửa — tính RSI và xét nến 4H ĐÃ ĐÓNG (PP3/PP4 giữ nguyên lỗi cũ:
+            # df_4h_raw không có cột RSI nên Exit B không bao giờ chạy).
+            from strategy.daily_cycle import m5_exit_b_fixed
+            if m5_exit_b_fixed(open_trade):
+                from strategy.indicators import add_indicators as _add_ind
+                df_b = _add_ind(df_4h_raw.iloc[:-1])
+                i_last = len(df_b) - 1
         if apply_4h_layer and allow_early_exit:
             if side == "LONG":
-                strong_b = long_early_exit_strong_b(df_4h_raw, i_last, confirm_bars)
+                strong_b = long_early_exit_strong_b(df_b, i_last, confirm_bars)
             else:
-                strong_b = short_early_exit_strong_b(df_4h_raw, i_last, confirm_bars)
+                strong_b = short_early_exit_strong_b(df_b, i_last, confirm_bars)
             if strong_b:
                 pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
                 pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
@@ -222,8 +230,11 @@ def compute_exit_candidates(
             fee_out = linear_taker_fee_usdt(size, exit_px, float(settings.TAKER_FEE))
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "M4_TIME_STOP"))
 
-    # ---------- Phương pháp 2: TP theo %change ----------
-    if method == METHOD_2 and df_4h_raw is not None and not df_4h_raw.empty:
+    # ---------- Phương pháp 2 (và lệnh đi ngang của PP5): TP theo %change ----------
+    pct_tp = method == METHOD_2 or (
+        method == METHOD_5 and open_trade.get("m5_wide") and getattr(settings, "M5_WIDE_PCT_TP", True)
+    )
+    if pct_tp and df_4h_raw is not None and not df_4h_raw.empty:
         bands = build_pct_change_avg_bands_series(df_4h_raw, lookback_trades=lookback_trades)
         upper = bands.get("upper")
         lower = bands.get("lower")

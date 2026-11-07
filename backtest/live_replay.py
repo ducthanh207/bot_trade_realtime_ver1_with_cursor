@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Backtest "phát lại live": chạy lại đúng vòng lặp bot/paper_loop.py trên dữ liệu lịch sử,
-cho mọi phương pháp (PP1–PP4) và nhiều cặp coin cùng lúc.
+cho mọi phương pháp (PP1–PP4, và PP5 khi chọn --methods 5) và nhiều cặp coin cùng lúc.
 
 Dùng lại trực tiếp code chiến lược của bot (strategy/*, bot/paper_fees.py, config/settings.py),
 chỉ thay đồng hồ thật bằng đồng hồ mô phỏng:
@@ -47,17 +47,22 @@ from strategy.risk import (
     m3_streak_multiplier,
 )
 from strategy.exit_engine import compute_exit_candidates, pick_best_exit
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5
 from strategy.regime import (
     classify_regime,
     m4_regime_entry_decision,
     m4_apply_regime_to_payload,
     m4_invalidation_hit,
 )
+from strategy.daily_cycle import daily_cycle_info, m5_entry_decision, m5_apply_cycle_to_payload
 
 H1 = pd.Timedelta(hours=1)
 H4 = pd.Timedelta(hours=4)
-ALL_METHODS = (METHOD_1, METHOD_2, METHOD_3, METHOD_4)
+ALL_METHODS = (METHOD_1, METHOD_2, METHOD_3, METHOD_4)  # mặc định khi không truyền --methods
+METHOD_CHOICES = ALL_METHODS + (METHOD_5,)  # [2026-11-07] PP5 chỉ chạy khi chọn --methods 5
+_M3_FAMILY = (METHOD_3, METHOD_4, METHOD_5)
+_M4_FAMILY = (METHOD_4, METHOD_5)
+D1 = pd.Timedelta(days=1)
 
 
 class _Bar(dict):
@@ -92,8 +97,11 @@ class MarketData:
 
     WINDOW = 200  # số nến live lấy về: get_klines_4h(limit=200), get_klines_1h(limit=200)
 
-    def __init__(self, symbol: str, df_1m: pd.DataFrame, strict: bool = True):
+    def __init__(self, symbol: str, df_1m: pd.DataFrame, strict: bool = True, df_1d: pd.DataFrame = None):
         self.symbol = symbol
+        # [2026-11-07] nến 1D cho PP5 (index giờ mở, tz VN). Tại t chỉ dùng nến đã đóng: giờ mở + 1 ngày <= t.
+        self.df_1d = df_1d if df_1d is not None else pd.DataFrame()
+        self._daily_cache = {}
         self.strict = strict
         self.df_1m = df_1m
         self.idx = df_1m.index
@@ -150,6 +158,20 @@ class MarketData:
             ind = add_indicators(self._past(self.df1h_raw, h))
             v = float(ind["ATR"].iloc[-1]) if len(ind) and ind.index[-1] == h else float("nan")
             self._atr_cache[h] = v
+        return v
+
+    def daily_at(self, t) -> dict:
+        """Chu kỳ nến ngày PP5 tại thời điểm t (cửa sổ M5_DAILY_KLINES nến đã đóng như bot live)."""
+        if self.df_1d.empty:
+            return {}
+        closed = self.df_1d.loc[self.df_1d.index + D1 <= t]
+        if closed.empty:
+            return {}
+        key = closed.index[-1]
+        v = self._daily_cache.get(key)
+        if v is None:
+            v = daily_cycle_info(closed.tail(int(settings.M5_DAILY_KLINES)))
+            self._daily_cache[key] = v
         return v
 
     def context_at(self, i: int):
@@ -223,7 +245,7 @@ class SlotSim:
         maint = settings.MAINT_MARGIN_RATE * ot["notional"]
         margin = ot["margin"]
         hard_stop_px = None
-        if self.method == METHOD_4 and size > 0:
+        if self.method in _M4_FAMILY and size > 0:
             hard_stop_px = entry - max_loss / size if side == "LONG" else entry + max_loss / size
         liq_px = entry + (maint - margin) / size if side == "LONG" else entry - (maint - margin) / size
         if hard_stop_px is None:
@@ -292,11 +314,16 @@ class SlotSim:
             "exit_reason": reason,
             "entry_rsi": ot.get("entry_rsi"),
             "exit_rsi": _f(row_closed.get("RSI")) if row_closed is not None else None,
+            # [2026-11-07] PP5: chu kỳ ngày lúc vào lệnh (trống với PP1–PP4)
+            "cycle": ot.get("m5_cycle"),
+            "cycle_wide": ot.get("m5_wide"),
+            "cycle_d_pct": ot.get("m5_d_pct"),
+            "cycle_x_pct": ot.get("m5_x_pct"),
         })
         self.balance = capital_after
         self.open_trade = None
         self._risk = None
-        if self.method in (METHOD_3, METHOD_4):
+        if self.method in _M3_FAMILY:
             self._update_cb(best_pnl, capital_after, now)
 
     def _update_cb(self, pnl, balance, now):
@@ -316,7 +343,7 @@ class SlotSim:
     # ----- Vào lệnh (giống paper_loop, nhánh "not open_trade and running and in_4h_window") -----
     def try_enter(self, md: MarketData, t, entry_px, prev_row_closed, row_closed, row_m3, df_1h, regime_info=None):
         method = self.method
-        if method in (METHOD_3, METHOD_4):
+        if method in _M3_FAMILY:
             if self.cb_heavy_until and t < self.cb_heavy_until:
                 return
             if self.cb_light_until and t < self.cb_light_until:
@@ -328,7 +355,7 @@ class SlotSim:
             return
         side = "LONG" if sig_long else "SHORT"
 
-        if method == METHOD_4:
+        if method in _M4_FAMILY:
             if m4_entry_rsi_extreme_block(side, row_closed.get("RSI")):
                 return
             if getattr(settings, "M4_REQUIRE_1H_CONFIRM", True) and not m4_entry_1h_confirm(side, df_1h):
@@ -341,10 +368,18 @@ class SlotSim:
             if not allow_regime:
                 return
 
+        # [2026-11-07] PP5 lọc chu kỳ nến ngày — giống bot/slot_engine.step_slot
+        m5_info, m5_wide = {}, False
+        if method == METHOD_5:
+            m5_info = md.daily_at(t)
+            allow_cycle, m5_wide = m5_entry_decision(side, m5_info.get("cycle"))
+            if not allow_cycle:
+                return
+
         size_mult = 1.0
-        if method in (METHOD_3, METHOD_4) and row_m3 is not None:
+        if method in _M3_FAMILY and row_m3 is not None:
             adx_val = float(row_m3.get("ADX", 25.0) or 25.0)
-            allow, adx_size_mult = m4_adx_zone(adx_val) if method == METHOD_4 else m3_adx_zone(adx_val)
+            allow, adx_size_mult = m4_adx_zone(adx_val) if method in _M4_FAMILY else m3_adx_zone(adx_val)
             if not allow:
                 return
             size_mult = adx_size_mult
@@ -364,9 +399,11 @@ class SlotSim:
             elif side == "SHORT" and higher_low and not lower_high:
                 size_mult = min(size_mult, disagree_size)
             size_mult *= m3_streak_multiplier(self.losses)
+        if method == METHOD_5 and m5_wide:
+            size_mult *= float(settings.M5_WIDE_SIZE_MULT)
 
         size, margin, notional = size_and_margin(self.balance, entry_px, leverage=self.leverage, wallet_pct=self.wallet_pct)
-        if method in (METHOD_3, METHOD_4) and size_mult < 1.0:
+        if method in _M3_FAMILY and size_mult < 1.0:
             size, margin, notional = size * size_mult, margin * size_mult, notional * size_mult
         if size <= 0 or margin > self.balance:
             return
@@ -376,7 +413,7 @@ class SlotSim:
         if method == METHOD_3:
             # Live gọi m3_atr_multiplier(datetime.now()) ngay lúc mở → luôn ra hệ số grace
             atr_mult_now = settings.M3_ATR_MULTIPLIER_GRACE
-        elif method == METHOD_4:
+        elif method in _M4_FAMILY:
             atr_mult_now = settings.M4_ATR_MULTIPLIER_GRACE
         else:
             atr_mult_now = settings.ATR_MULTIPLIER
@@ -401,12 +438,15 @@ class SlotSim:
             "trading_method": method,
             "_fee_in": fee_in,
         }
-        if method in (METHOD_3, METHOD_4):
+        if method in _M3_FAMILY:
             ot["atr_multiplier_override"] = atr_mult_now
         if method == METHOD_4:
             ot["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
             if settings.M4_REGIME_ENABLED or settings.M4_INVALIDATION_EXIT:  # [2026-11-01]
                 m4_apply_regime_to_payload(ot, side, m4_regime, m4_tight, row_closed)
+        if method == METHOD_5:
+            ot["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
+            m5_apply_cycle_to_payload(ot, side, m5_info, m5_wide)
         self.open_trade = ot
         self.balance -= fee_in
         self._prepare_risk()
@@ -568,7 +608,14 @@ def _backtest_one(job):
     df_1m = load_1m(sym, start - timedelta(days=a["warmup_days"]), end, offline=True)
     if df_1m.empty:
         return sym, None
-    md = MarketData(sym, df_1m, strict=not a["fast"])
+    df_1d = None
+    if METHOD_5 in a["methods"]:
+        from backtest.binance_data import load_1d, resample_ohlcv
+
+        df_1d = load_1d(sym, end)
+        if df_1d.empty:  # không tải được 1D → gộp từ 1m (lịch sử ngắn: %change ngày có thể chưa có)
+            df_1d = resample_ohlcv(df_1m, "24h")
+    md = MarketData(sym, df_1m, strict=not a["fast"], df_1d=df_1d)
     slots = run_symbol(md, start, a["methods"], a["capital"], a["leverage"], a["wallet_pct"], a["lookback_trades"])
     res = {"summaries": [], "months": [], "trades": []}
     for s in slots:
@@ -579,7 +626,7 @@ def _backtest_one(job):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Backtest phát lại vòng lặp live (PP1–PP4) trên nhiều cặp coin.")
+    p = argparse.ArgumentParser(description="Backtest phát lại vòng lặp live (PP1–PP5) trên nhiều cặp coin.")
     p.add_argument("--symbols", nargs="+", default=None, help="Ví dụ: BTCUSDT ETHUSDT SOLUSDT (mặc định: SYMBOL trong .env)")
     p.add_argument("--universe", choices=["volume", "marketcap", "both"], default=None,
                    help="Tự chọn cặp: volume = biến động volume lớn nhất trong khoảng backtest; marketcap = vốn hoá lớn nhất; both = cả 2 nhóm")
@@ -589,7 +636,8 @@ def main(argv=None):
                    help="cv = volume biến động mạnh nhất (độ lệch chuẩn/trung bình volume ngày); total = tổng volume lớn nhất")
     p.add_argument("--start", default=None, help="YYYY-MM-DD (mặc định: 365 ngày trước)")
     p.add_argument("--end", default=None, help="YYYY-MM-DD, không gồm ngày này (mặc định: hôm nay)")
-    p.add_argument("--methods", nargs="+", default=list(ALL_METHODS), choices=list(ALL_METHODS))
+    p.add_argument("--methods", nargs="+", default=list(ALL_METHODS), choices=list(METHOD_CHOICES),
+                   help="Mặc định 1 2 3 4. PP5 (PP4 + chu kỳ nến ngày) chạy khi thêm 5, vd --methods 4 5")
     p.add_argument("--capital", type=float, default=settings.CAPITAL_START)
     p.add_argument("--leverage", type=float, default=settings.LEVERAGE)
     p.add_argument("--wallet-pct", type=float, default=settings.WALLET_PCT)
@@ -648,6 +696,16 @@ def main(argv=None):
                 f.result()
             except Exception as e:
                 print(f"  {futs[f]}: lỗi tải dữ liệu ({e}), bỏ qua cặp này")
+
+    # 1b) [2026-11-07] PP5 cần nến ngày dài hơn nhiều (EMA + %change trên 1D): tải 1D riêng (1 request/cặp)
+    if METHOD_5 in a.methods:
+        d_start = start - timedelta(days=int(settings.M5_DAILY_KLINES) + 30)
+        print(f"Tải nến 1D cho PP5 từ {d_start.date()}...")
+        for sym in symbols:
+            try:
+                binance_data.download_1d(sym, d_start, end, print)
+            except Exception as e:
+                print(f"  {sym}: lỗi tải nến 1D ({e}) → dùng nến 1D gộp từ 1m (lịch sử ngắn hơn)")
 
     # 2) Backtest song song theo cặp, mỗi cặp đi tuần tự từng phút theo thời gian
     workers = a.workers or max(1, (os.cpu_count() or 2) - 1)

@@ -424,6 +424,17 @@ def paper2_stop():
     _paper2_status = "stopped"
 
 
+def _cycle_json(info):
+    """Chu kỳ ngày PP5 → dict JSON được (ngày dạng ISO)."""
+    if not info:
+        return None
+    out = dict(info)
+    d = out.get("day")
+    if d is not None and hasattr(d, "isoformat"):
+        out["day"] = d.isoformat()
+    return out
+
+
 def to_status_dict():
     """Dict cho web/Telegram. Ưu tiên paper trade."""
     pos = get_position()
@@ -461,6 +472,14 @@ def to_status_dict():
     winrate4 = (wins4 / n4 * 100.0) if n4 else 0.0
     paper4_started = get_paper4_started_at()
 
+    paper5_trades = get_paper5_trades()
+    n5 = len(paper5_trades)
+    wins5 = sum(1 for t in paper5_trades if float(t.get("profit", 0)) > 0)
+    long_ct5 = sum(1 for t in paper5_trades if str(t.get("side", "")).upper() == "LONG")
+    short_ct5 = n5 - long_ct5
+    winrate5 = (wins5 / n5 * 100.0) if n5 else 0.0
+    paper5_started = get_paper5_started_at()
+
     try:
         from config import settings as _fee_cfg
         from bot.paper_fees import slot_total_fees_usdt, linear_taker_fee_usdt
@@ -470,6 +489,7 @@ def to_status_dict():
         _paper2_total_fees = slot_total_fees_usdt(paper2_trades, get_paper2_open_trade(), _tf)
         _paper3_total_fees = slot_total_fees_usdt(paper3_trades, get_paper3_open_trade(), _tf)
         _paper4_total_fees = slot_total_fees_usdt(paper4_trades, get_paper4_open_trade(), _tf)
+        _paper5_total_fees = slot_total_fees_usdt(paper5_trades, get_paper5_open_trade(), _tf)
 
         # True net PNL = profit (raw - exit_fee) - entry_fee per trade
         def _net_pnl(trades, tf):
@@ -483,15 +503,18 @@ def to_status_dict():
         total_pnl2 = _net_pnl(paper2_trades, _tf)
         total_pnl3 = _net_pnl(paper3_trades, _tf)
         total_pnl4 = _net_pnl(paper4_trades, _tf)
+        total_pnl5 = _net_pnl(paper5_trades, _tf)
     except Exception:
         _paper_total_fees = 0.0
         _paper2_total_fees = 0.0
         _paper3_total_fees = 0.0
         _paper4_total_fees = 0.0
+        _paper5_total_fees = 0.0
         total_pnl = sum(float(t.get("profit", 0)) for t in paper_trades)
         total_pnl2 = sum(float(t.get("profit", 0)) for t in paper2_trades)
         total_pnl3 = sum(float(t.get("profit", 0)) for t in paper3_trades)
         total_pnl4 = sum(float(t.get("profit", 0)) for t in paper4_trades)
+        total_pnl5 = sum(float(t.get("profit", 0)) for t in paper5_trades)
 
     return {
         "balance": get_balance(),
@@ -575,6 +598,27 @@ def to_status_dict():
         "paper4_cb_light_until": str(_paper4_cb_light_until) if _paper4_cb_light_until else None,
         "paper4_cb_heavy_until": str(_paper4_cb_heavy_until) if _paper4_cb_heavy_until else None,
         "paper4_hidden_trade_keys": get_paper4_hidden_trade_keys(),
+        # Paper trade 5 (PP5)
+        "paper5_initial_capital": _paper5_initial_capital,
+        "paper5_balance": _paper5_balance,
+        "paper5_started_at": paper5_started.isoformat() if paper5_started else None,
+        "paper5_status": _paper5_status,
+        "paper5_open_trade": _paper5_open_trade,
+        "paper5_trades": list(_paper5_trades),
+        "paper5_last_trade": _paper5_last_trade,
+        "paper5_trades_count": n5,
+        "paper5_winrate": round(winrate5, 2),
+        "paper5_total_pnl": round(total_pnl5, 2),
+        "paper5_total_fees": _paper5_total_fees,
+        "paper5_long_count": long_ct5,
+        "paper5_short_count": short_ct5,
+        "paper5_leverage": _paper5_leverage,
+        "paper5_wallet_pct": _paper5_wallet_pct,
+        "paper5_consecutive_losses": _paper5_consecutive_losses,
+        "paper5_cb_light_until": str(_paper5_cb_light_until) if _paper5_cb_light_until else None,
+        "paper5_cb_heavy_until": str(_paper5_cb_heavy_until) if _paper5_cb_heavy_until else None,
+        "paper5_hidden_trade_keys": get_paper5_hidden_trade_keys(),
+        "paper5_daily_cycle": _cycle_json(get_paper5_daily_cycle()),
     }
 
 
@@ -874,3 +918,163 @@ def paper4_pause():
 def paper4_stop():
     global _paper4_status
     _paper4_status = "stopped"
+
+
+# ---------- [2026-11-07] Paper trade 5 (Method 5 — PP4 + chu kỳ nến ngày) ----------
+_paper5_initial_capital = 0.0
+_paper5_balance = 0.0
+_paper5_started_at = None
+_paper5_status = "stopped"
+_paper5_open_trade = None
+_paper5_trades = []
+_paper5_last_trade = None
+_paper5_leverage = None
+_paper5_wallet_pct = None
+_paper5_consecutive_losses = 0
+_paper5_cb_light_until = None
+_paper5_cb_heavy_until = None
+_paper5_hidden_trade_keys = None
+
+
+def get_paper5_hidden_trade_keys():
+    return list(_paper5_hidden_trade_keys) if _paper5_hidden_trade_keys else []
+
+def set_paper5_hidden_trade_keys(keys):
+    global _paper5_hidden_trade_keys
+    _paper5_hidden_trade_keys = list(keys) if keys else []
+
+
+def set_paper5_initial_capital(value):
+    global _paper5_initial_capital
+    _paper5_initial_capital = float(value)
+
+def get_paper5_initial_capital():
+    return _paper5_initial_capital
+
+def set_paper5_balance(value):
+    global _paper5_balance
+    _paper5_balance = float(value)
+
+def get_paper5_balance():
+    return _paper5_balance
+
+def set_paper5_started_at(dt):
+    global _paper5_started_at
+    _paper5_started_at = dt
+
+def get_paper5_started_at():
+    return _paper5_started_at
+
+def set_paper5_status(value):
+    global _paper5_status
+    if value in ("stopped", "running", "paused"):
+        _paper5_status = value
+
+def get_paper5_status():
+    return _paper5_status
+
+def set_paper5_open_trade(trade):
+    global _paper5_open_trade
+    _paper5_open_trade = trade
+
+def get_paper5_open_trade():
+    return _paper5_open_trade
+
+def append_paper5_trade(trade):
+    global _paper5_trades
+    _paper5_trades.append(trade)
+
+def get_paper5_trades():
+    return list(_paper5_trades)
+
+def restore_paper5_trades(trades):
+    global _paper5_trades
+    _paper5_trades = list(trades) if trades else []
+
+def set_paper5_last_trade(trade):
+    global _paper5_last_trade
+    _paper5_last_trade = trade
+
+def get_paper5_last_trade():
+    return _paper5_last_trade
+
+def get_paper5_leverage():
+    return _paper5_leverage
+
+def set_paper5_leverage(value):
+    global _paper5_leverage
+    _paper5_leverage = float(value) if value is not None else None
+
+def get_paper5_wallet_pct():
+    return _paper5_wallet_pct
+
+def set_paper5_wallet_pct(value):
+    global _paper5_wallet_pct
+    _paper5_wallet_pct = float(value) if value is not None else None
+
+def get_paper5_consecutive_losses():
+    return _paper5_consecutive_losses
+
+def set_paper5_consecutive_losses(v):
+    global _paper5_consecutive_losses
+    _paper5_consecutive_losses = int(v)
+
+def get_paper5_cb_light_until():
+    return _paper5_cb_light_until
+
+def set_paper5_cb_light_until(dt):
+    global _paper5_cb_light_until
+    _paper5_cb_light_until = dt
+
+def get_paper5_cb_heavy_until():
+    return _paper5_cb_heavy_until
+
+def set_paper5_cb_heavy_until(dt):
+    global _paper5_cb_heavy_until
+    _paper5_cb_heavy_until = dt
+
+def paper5_start(initial_capital):
+    global _paper5_initial_capital, _paper5_balance, _paper5_started_at, _paper5_status, _paper5_open_trade
+    from datetime import datetime
+    _paper5_open_trade = None
+    _paper5_status = "running"
+    if _paper5_started_at is None:
+        _paper5_initial_capital = float(initial_capital)
+        _paper5_balance = float(initial_capital)
+        _paper5_started_at = datetime.now(_tz_app)
+    else:
+        if initial_capital and initial_capital > 0:
+            _paper5_initial_capital = float(initial_capital)
+
+def paper5_clear_history():
+    global _paper5_trades, _paper5_last_trade, _paper5_open_trade
+    global _paper5_initial_capital, _paper5_balance, _paper5_started_at, _paper5_status
+    global _paper5_consecutive_losses, _paper5_cb_light_until, _paper5_cb_heavy_until
+    _paper5_trades = []
+    _paper5_last_trade = None
+    _paper5_open_trade = None
+    _paper5_started_at = None
+    _paper5_status = "stopped"
+    _paper5_balance = _paper5_initial_capital if _paper5_initial_capital else 0
+    _paper5_consecutive_losses = 0
+    _paper5_cb_light_until = None
+    _paper5_cb_heavy_until = None
+
+def paper5_pause():
+    global _paper5_status
+    _paper5_status = "paused"
+
+def paper5_stop():
+    global _paper5_status
+    _paper5_status = "stopped"
+
+
+# Chu kỳ nến ngày PP5 gần nhất (vòng lặp paper ghi vào, web/Telegram hiển thị; không lưu file)
+_paper5_daily_cycle = None
+
+def set_paper5_daily_cycle(info):
+    global _paper5_daily_cycle
+    _paper5_daily_cycle = dict(info) if info else None
+
+def get_paper5_daily_cycle():
+    return dict(_paper5_daily_cycle) if _paper5_daily_cycle else None

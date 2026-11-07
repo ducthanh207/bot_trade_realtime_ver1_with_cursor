@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Engine trade thật: mỗi "bot" = (tài khoản sàn × cặp coin × chiến lược PP1–PP4).
+Engine trade thật: mỗi "bot" = (tài khoản sàn × cặp coin × chiến lược PP1–PP5).
 
 Mỗi vòng (LOOP_INTERVAL_SEC):
   1. Tải nến 4H/1H/1m cho từng cặp coin đang chạy (API công khai, dùng chung giữa các bot).
@@ -32,7 +32,7 @@ from bot.slot_engine import MarketContext, step_slot, update_circuit_breaker, is
 from exchange.binance_futures import BinanceFuturesTrader, BinanceAPIError, ENV_LABELS
 from strategy import add_indicators
 from strategy.risk import max_loss_from_capital
-from strategy.strategies.registry import METHOD_3, METHOD_4
+from strategy.strategies.registry import METHOD_3, METHOD_4, METHOD_5
 from live import store
 
 _tz_app = getattr(settings, "GMT7", timezone.utc)
@@ -188,7 +188,22 @@ class LiveEngine:
                 traceback.print_exc()
             time.sleep(settings.LOOP_INTERVAL_SEC)
 
-    def _load_market(self, symbol: str, in_window: bool):
+    def _daily_klines(self, symbol: str):
+        """[2026-11-07] Nến 1D cho PP5, tải lại tối đa mỗi 10 phút mỗi cặp (lỗi mạng → dùng bản cũ)."""
+        cache = self.__dict__.setdefault("_daily_cache", {})
+        hit = cache.get(symbol)
+        if hit is not None and time.monotonic() - hit[0] < 600:
+            return hit[1]
+        try:
+            df = self.market.get_klines(symbol, "1d", int(getattr(settings, "M5_DAILY_KLINES", 1000)) + 1)
+            if df is not None and not df.empty:
+                cache[symbol] = (time.monotonic(), df)
+                return df
+        except Exception:
+            pass
+        return hit[1] if hit is not None else None
+
+    def _load_market(self, symbol: str, in_window: bool, need_daily: bool = False):
         df_4h_raw = self.market.get_klines_4h(symbol, limit=200)
         df_1m = self.market.get_klines_1m(symbol, limit=480)
         df_1h = pd.DataFrame()
@@ -200,7 +215,8 @@ class LiveEngine:
             pass
         if df_4h_raw is None or df_4h_raw.empty or len(df_4h_raw) < 20:
             return None
-        mkt = MarketContext(df_4h_raw, df_1m, df_1h, in_window)
+        df_1d = self._daily_klines(symbol) if need_daily else None
+        mkt = MarketContext(df_4h_raw, df_1m, df_1h, in_window, df_1d=df_1d)
         if not mkt.ok:
             return None
         self.market_cache[symbol] = {"price": mkt.last_price(), "t": _now().isoformat()}
@@ -214,7 +230,8 @@ class LiveEngine:
         markets = {}
         for sym in sorted({b["symbol"] for b in active}):
             try:
-                markets[sym] = self._load_market(sym, in_window)
+                need_daily = any(b["symbol"] == sym and str(b.get("method")) == METHOD_5 for b in active)
+                markets[sym] = self._load_market(sym, in_window, need_daily)
             except Exception as e:
                 self._error(f"mkt:{sym}", f"Không tải được nến {sym}: {e}")
                 markets[sym] = None
@@ -526,7 +543,7 @@ class LiveEngine:
         st["trades"].append(closed)
         del st["trades"][:-MAX_TRADES_KEPT]
         st["balance"] = capital_after
-        if bot["method"] in (METHOD_3, METHOD_4):
+        if bot["method"] in (METHOD_3, METHOD_4, METHOD_5):
             api = self._slot_api(bot, st)
             try:
                 update_circuit_breaker(api["cb"], profit, capital_after)

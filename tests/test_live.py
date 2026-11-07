@@ -314,3 +314,36 @@ def test_telegram_panel_controls(live, monkeypatch):
     monkeypatch.setattr(tc, "_call", lambda *a, **k: None)
     tc._process(conn, "123:ABC", upd3, own_poller=True)
     assert store.real_trading_enabled() is False
+
+
+# ---------------------------------------------------------------- [2026-11-07] PP5 trên trade thật
+def _daily(trend: float, days=300):
+    """Nến 1D giả (giờ mở 07:00 VN), giá đi một chiều mạnh để chu kỳ rõ TĂNG/GIẢM; nến cuối = nến đang chạy."""
+    idx = pd.date_range(end=pd.Timestamp.now(tz="Asia/Bangkok").normalize() + pd.Timedelta(hours=7),
+                        periods=days, freq="1D")
+    close = 60000 * np.exp(np.arange(days) * trend)
+    return pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99, "close": close, "volume": 1.0}, index=idx)
+
+
+@pytest.mark.parametrize("trend,opens", [(0.01, True), (-0.01, False)])
+def test_pp5_bot_follows_daily_cycle(live, monkeypatch, trend, opens):
+    sb, store, engine = live
+    import bot.slot_engine as se
+    monkeypatch.setattr(se, "long_entry", lambda p, r: True)
+    monkeypatch.setattr(se, "short_entry", lambda p, r: False)
+    monkeypatch.setattr(se, "m4_entry_1h_confirm", lambda side, df: True)
+    monkeypatch.setattr(se, "m4_entry_rsi_extreme_block", lambda side, rsi: False)
+    monkeypatch.setattr(se, "compute_exit_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(engine, "is_4h_boundary_window", lambda: True)
+    trader, market = FakeTrader(), FakeMarket()
+    trader.fill_px = float(market.m1["close"].iloc[-1])
+    market.get_klines = lambda s=None, interval="1d", limit=1000: _daily(trend).tail(limit)
+    eng = engine.LiveEngine(market_client=market, trader_factory=lambda a, k, s: trader, notifier=FakeNotifier())
+    store.set_real_trading_enabled(True)
+    _, b = setup_bot(store, method="5")
+    eng.tick()
+    ot = store.bot_state(b["id"])["open_trade"]
+    if opens:  # chu kỳ TĂNG → LONG được vào, có ghi chu kỳ
+        assert ot is not None and ot["side"] == "LONG" and ot["m5_cycle"] == "UP"
+    else:      # chu kỳ GIẢM → chặn LONG
+        assert ot is None and trader.orders == []

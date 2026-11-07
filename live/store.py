@@ -34,6 +34,7 @@ METHODS = {
     "2": "PP2 — TP %change + lọc RSI 1H",
     "3": "PP3 — Exit B + EMA filter + circuit breaker",
     "4": "PP4 — nâng cấp PP3 (hard stop % vốn)",
+    "5": "PP5 — PP4 + lọc chu kỳ nến ngày (EMA + %change)",
 }
 EXCHANGE_STOP_MODES = ("trail", "hard", "off")
 BOT_STATUSES = ("stopped", "running", "paused")
