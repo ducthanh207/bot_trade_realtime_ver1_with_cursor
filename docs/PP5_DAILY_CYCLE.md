@@ -4,8 +4,13 @@ PP5 giữ nguyên toàn bộ PP4 (tín hiệu 4H, xác nhận RSI 1H, lọc RSI 
 circuit breaker, hard stop 10% vốn, ATR trailing 2.5 → 2.2 sau 12h) và thêm bộ lọc chu kỳ theo nến 1D.
 Code: `strategy/daily_cycle.py`. Thiết kế đầy đủ: tài liệu "Thiết kế PP5: PP4 + chu kỳ nến ngày".
 
-**An toàn:** PP5 chưa gắn vào slot paper hay bot trade thật nào, nên bot đang chạy trên VPS không đổi.
-`TRADING_METHOD=5` cũng không được nhận. PP5 hiện chỉ chạy trong backtest.
+**Chạy ở đâu:**
+- **Paper trade 5** (menu web "Paper trade 5", trang `/paper5`): slot paper riêng, mặc định *stopped*.
+  Bấm "Kích hoạt" để bắt đầu. Trang hiển thị chu kỳ ngày hiện tại, có nút backtest PP5 (chỉ xem,
+  không đổi paper thật). Telegram báo mở/đóng lệnh với tag `[PAPER5]` và chu kỳ lúc vào lệnh.
+- **Trade thật** (`/live`): chọn chiến lược "PP5" khi tạo bot. Vẫn chịu công tắc trade thật chung
+  (mặc định TẮT) và stop dự phòng trên sàn như các PP khác.
+- PP1–PP4 không đổi. `TRADING_METHOD=5` trong .env không được nhận (không dùng chế độ cũ).
 
 ## Quy tắc (mọi phép xét dùng giá đóng của nến 1D đã đóng)
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Vòng lặp paper trade: bốn slot song song — Paper 1/2/3/4.
+Vòng lặp paper trade: năm slot song song — Paper 1/2/3/4/5 (Paper 5 = PP5, thêm 2026-11-07).
 Dùng giá thật từ Binance (klines); chỉ cập nhật state, không gọi sàn.
 Slot stopped: bỏ qua; paused: vẫn thoát lệnh, không mở mới.
 Logic vào/ra lệnh của mỗi slot nằm ở bot/slot_engine.py (dùng chung với trade thật).
@@ -71,7 +71,36 @@ _CB_SLOT_API = {
         "set_heavy": lambda dt: state.set_paper4_cb_heavy_until(dt),
         "get_trades": lambda: state.get_paper4_trades(),
     },
+    5: {
+        "get_losses": lambda: state.get_paper5_consecutive_losses(),
+        "set_losses": lambda v: state.set_paper5_consecutive_losses(v),
+        "get_light": lambda: state.get_paper5_cb_light_until(),
+        "set_light": lambda dt: state.set_paper5_cb_light_until(dt),
+        "get_heavy": lambda: state.get_paper5_cb_heavy_until(),
+        "set_heavy": lambda dt: state.set_paper5_cb_heavy_until(dt),
+        "get_trades": lambda: state.get_paper5_trades(),
+    },
 }
+
+
+# [2026-11-07] Nến 1D cho PP5: tải lại tối đa mỗi 10 phút (nến ngày chỉ đổi lúc 07:00 VN)
+_DAILY_CACHE = {"t": 0.0, "df": None}
+DAILY_REFRESH_SEC = 600
+
+
+def get_daily_klines(client, symbol):
+    """Nến 1D (gồm nến đang chạy; MarketContext.daily_info tự bỏ). Lỗi mạng → dùng bản cũ."""
+    now = time.monotonic()
+    df = _DAILY_CACHE["df"]
+    if df is None or now - _DAILY_CACHE["t"] >= DAILY_REFRESH_SEC:
+        try:
+            new = client.get_klines(symbol, "1d", int(getattr(settings, "M5_DAILY_KLINES", 1000)) + 1)
+            if new is not None and not new.empty:
+                _DAILY_CACHE.update(t=now, df=new)
+                df = new
+        except Exception:
+            pass
+    return df
 
 
 def _update_slot_circuit_breaker(slot_id: int, pnl: float, balance: float, closed_trade: dict):
@@ -173,6 +202,20 @@ def _paper_slot_configs(notify_func=None):
                 "get_wct": state.get_paper4_wallet_pct,
             },
         ),
+        (
+            5,
+            {
+                "get_status": state.get_paper5_status,
+                "get_balance": state.get_paper5_balance,
+                "set_balance": state.set_paper5_balance,
+                "get_open": state.get_paper5_open_trade,
+                "set_open": state.set_paper5_open_trade,
+                "append_trade": state.append_paper5_trade,
+                "set_last": state.set_paper5_last_trade,
+                "get_lev": state.get_paper5_leverage,
+                "get_wct": state.get_paper5_wallet_pct,
+            },
+        ),
     ]
     out = []
     for sid, api in apis:
@@ -229,7 +272,8 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
     while True:
         try:
             if (state.get_paper_status() == "stopped" and state.get_paper2_status() == "stopped"
-                    and state.get_paper3_status() == "stopped" and state.get_paper4_status() == "stopped"):
+                    and state.get_paper3_status() == "stopped" and state.get_paper4_status() == "stopped"
+                    and state.get_paper5_status() == "stopped"):
                 time.sleep(settings.LOOP_INTERVAL_SEC)
                 continue
 
@@ -253,7 +297,16 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
                 time.sleep(settings.LOOP_INTERVAL_SEC)
                 continue
 
-            mkt = MarketContext(df_4h_raw, df_1m, df_1h, _is_4h_boundary_window())
+            # PP5 (slot 5) cần nến 1D; chỉ tải khi slot 5 không dừng
+            df_1d = None
+            if state.get_paper5_status() != "stopped" and client.is_connected():
+                df_1d = get_daily_klines(client, symbol)
+            mkt = MarketContext(df_4h_raw, df_1m, df_1h, _is_4h_boundary_window(), df_1d=df_1d)
+            if df_1d is not None:
+                try:
+                    state.set_paper5_daily_cycle(mkt.daily_info())
+                except Exception:
+                    pass
             if not mkt.ok:
                 time.sleep(settings.LOOP_INTERVAL_SEC)
                 continue

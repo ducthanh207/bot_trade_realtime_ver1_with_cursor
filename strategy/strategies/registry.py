@@ -5,7 +5,7 @@ METHOD_1 = "1"
 METHOD_2 = "2"
 METHOD_3 = "3"
 METHOD_4 = "4"
-METHOD_5 = "5"  # [2026-11-07] PP4 + lọc chu kỳ nến ngày; chưa gắn slot paper/live, chỉ chạy backtest
+METHOD_5 = "5"  # [2026-11-07] PP4 + lọc chu kỳ nến ngày (Paper 5, /live, backtest)
 
 _LABELS = {
     METHOD_1: "Phương pháp 1 — thoát cổ điển (4H + early + ATR trail + SL)",

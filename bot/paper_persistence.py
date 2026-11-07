@@ -50,6 +50,10 @@ def save_paper_state():
         started4 = state.get_paper4_started_at()
         cb_light4 = state.get_paper4_cb_light_until()
         cb_heavy4 = state.get_paper4_cb_heavy_until()
+        open5 = state.get_paper5_open_trade()
+        started5 = state.get_paper5_started_at()
+        cb_light5 = state.get_paper5_cb_light_until()
+        cb_heavy5 = state.get_paper5_cb_heavy_until()
         data = {
             "paper_initial_capital": state.get_paper_initial_capital(),
             "paper_balance": state.get_paper_balance(),
@@ -98,6 +102,19 @@ def save_paper_state():
             "paper4_cb_light_until": cb_light4.isoformat() if hasattr(cb_light4, "isoformat") else cb_light4,
             "paper4_cb_heavy_until": cb_heavy4.isoformat() if hasattr(cb_heavy4, "isoformat") else cb_heavy4,
             "paper4_hidden_trade_keys": state.get_paper4_hidden_trade_keys(),
+            "paper5_initial_capital": state.get_paper5_initial_capital(),
+            "paper5_balance": state.get_paper5_balance(),
+            "paper5_started_at": started5.isoformat() if started5 else None,
+            "paper5_status": state.get_paper5_status(),
+            "paper5_open_trade": _serialize_for_save(open5) if open5 else None,
+            "paper5_trades": _serialize_for_save(state.get_paper5_trades()),
+            "paper5_last_trade": _serialize_for_save(state.get_paper5_last_trade()) if state.get_paper5_last_trade() else None,
+            "paper5_leverage": state.get_paper5_leverage(),
+            "paper5_wallet_pct": state.get_paper5_wallet_pct(),
+            "paper5_consecutive_losses": state.get_paper5_consecutive_losses(),
+            "paper5_cb_light_until": cb_light5.isoformat() if hasattr(cb_light5, "isoformat") else cb_light5,
+            "paper5_cb_heavy_until": cb_heavy5.isoformat() if hasattr(cb_heavy5, "isoformat") else cb_heavy5,
+            "paper5_hidden_trade_keys": state.get_paper5_hidden_trade_keys(),
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=0)
@@ -295,6 +312,49 @@ def load_paper_state():
         state.set_paper4_cb_heavy_until(_parse_dt(data.get("paper4_cb_heavy_until")))
         hk4 = data.get("paper4_hidden_trade_keys")
         state.set_paper4_hidden_trade_keys(hk4 if isinstance(hk4, list) else [])
+        # ---------- Paper 5 (PP5) ----------
+        if data.get("paper5_initial_capital") is not None:
+            state.set_paper5_initial_capital(float(data.get("paper5_initial_capital") or 0))
+        if data.get("paper5_balance") is not None:
+            state.set_paper5_balance(float(data.get("paper5_balance") or 0))
+        state.set_paper5_started_at(_parse_dt(data.get("paper5_started_at")))
+        state.set_paper5_status(str(data.get("paper5_status") or "stopped"))
+        trades5 = []
+        for t in (data.get("paper5_trades") or []):
+            tt = dict(t)
+            tt["entry_time"] = _parse_dt(t.get("entry_time"))
+            tt["exit_time"] = _parse_dt(t.get("exit_time"))
+            trades5.append(tt)
+        state.restore_paper5_trades(trades5)
+        lev5 = data.get("paper5_leverage")
+        if lev5 is not None:
+            state.set_paper5_leverage(float(lev5))
+        wct5 = data.get("paper5_wallet_pct")
+        if wct5 is not None:
+            state.set_paper5_wallet_pct(float(wct5))
+        last5 = data.get("paper5_last_trade")
+        if last5:
+            last5 = dict(last5)
+            last5["entry_time"] = _parse_dt(last5.get("entry_time"))
+            last5["exit_time"] = _parse_dt(last5.get("exit_time"))
+            state.set_paper5_last_trade(last5)
+        open5 = data.get("paper5_open_trade")
+        if open5:
+            open5 = dict(open5)
+            open5["entry_time"] = _parse_dt(open5.get("entry_time"))
+            if open5.get("last_sl_check"):
+                open5["last_sl_check"] = _parse_dt(open5["last_sl_check"])
+            state.set_paper5_open_trade(open5)
+        losses5 = data.get("paper5_consecutive_losses")
+        if losses5 is not None:
+            try:
+                state.set_paper5_consecutive_losses(int(losses5))
+            except (TypeError, ValueError):
+                pass
+        state.set_paper5_cb_light_until(_parse_dt(data.get("paper5_cb_light_until")))
+        state.set_paper5_cb_heavy_until(_parse_dt(data.get("paper5_cb_heavy_until")))
+        hk5 = data.get("paper5_hidden_trade_keys")
+        state.set_paper5_hidden_trade_keys(hk5 if isinstance(hk5, list) else [])
         if _restore_pending or _restore_pending_paper2:
             return True
         return False

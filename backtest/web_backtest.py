@@ -64,7 +64,18 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
     df_1m = binance_data.load_1m(symbol, start_dt - timedelta(days=WARMUP_DAYS), end_dt, log=lambda *a: None)
     if df_1m is None or len(df_1m) < 60 * 24 * 7:
         return {"error": "Không đủ dữ liệu nến 1m từ Binance"}
-    md = MarketData(symbol, df_1m, strict=True)
+    df_1d = None
+    if str(method) == "5":  # [2026-11-07] PP5 cần nến ngày dài (EMA + %change trên 1D)
+        from config import settings as _cfg
+        try:
+            binance_data.download_1d(symbol, start_dt - timedelta(days=int(_cfg.M5_DAILY_KLINES) + 30), end_dt,
+                                     log=lambda *a: None)
+        except Exception:
+            pass
+        df_1d = binance_data.load_1d(symbol, end_dt)
+        if df_1d.empty:
+            df_1d = binance_data.resample_ohlcv(df_1m, "24h")
+    md = MarketData(symbol, df_1m, strict=True, df_1d=df_1d)
     slot = run_symbol(md, pd.Timestamp(start_dt), [str(method)], float(initial_capital),
                       float(leverage), float(wallet_pct), int(lookback_trades))[0]
 

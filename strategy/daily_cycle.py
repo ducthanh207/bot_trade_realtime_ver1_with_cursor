@@ -44,6 +44,19 @@ CYCLE_SIDE_SHORT = "SIDE_SHORT"
 CYCLE_SIDE_MIXED = "SIDE_MIXED"
 SIDEWAYS = (CYCLE_SIDE_LONG, CYCLE_SIDE_SHORT, CYCLE_SIDE_MIXED)
 
+_LABELS = {
+    CYCLE_UP: "Tăng (chỉ LONG)",
+    CYCLE_DOWN: "Giảm (chỉ SHORT)",
+    CYCLE_NEUTRAL: "Trung tính (cả hai phía)",
+    CYCLE_SIDE_LONG: "Đi ngang thiên LONG",
+    CYCLE_SIDE_SHORT: "Đi ngang thiên SHORT",
+    CYCLE_SIDE_MIXED: "Đi ngang hai phía",
+}
+
+
+def cycle_label(cycle) -> str:
+    return _LABELS.get(cycle, "Chưa có dữ liệu nến ngày")
+
 _COLS = ["open", "high", "low", "close", "volume"]
 
 

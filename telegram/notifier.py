@@ -250,7 +250,9 @@ def notify_trade_closed(closed: dict, source: str = "loop", paper_slot: int = No
         leverage = getattr(settings, "LEVERAGE", 20.0)
         try:
             from bot import state
-            if slot == 4:
+            if slot == 5:
+                leverage = state.get_paper5_leverage() or leverage
+            elif slot == 4:
                 leverage = state.get_paper4_leverage() or leverage
             elif slot == 3:
                 leverage = state.get_paper3_leverage() or leverage
@@ -327,6 +329,10 @@ def notify_trade_opened(open_trade: dict, source: str = "loop", paper_slot: int 
                     lines.append(
                         f"%change (lúc vào): ±{hw}% — upper {float(pu):.2f} USDT | lower {float(pl):.2f} USDT"
                     )
+            if open_trade.get("m5_cycle"):  # [2026-11-07] PP5: chu kỳ nến ngày lúc vào lệnh
+                from strategy.daily_cycle import cycle_label
+                wide = " — thoát nới" if open_trade.get("m5_wide") else ""
+                lines.append(f"Chu kỳ ngày: {cycle_label(open_trade.get('m5_cycle'))}{wide}")
         except Exception:
             pass
         return send_message("\n".join(lines))

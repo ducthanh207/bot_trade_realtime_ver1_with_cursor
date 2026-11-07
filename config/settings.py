@@ -130,7 +130,7 @@ M4_EARLY_CUT_ONLY_TIGHT = _env_bool("M4_EARLY_CUT_ONLY_TIGHT", "true")
 M4_SMOOTH_GRACE = _env_bool("M4_SMOOTH_GRACE")
 
 # ---------- [2026-11-07] Method 5 = PP4 + lọc chu kỳ nến ngày (1D) ----------
-# PP5 chưa gắn vào slot paper/live nào: hiện chỉ chạy trong backtest (--methods 5). PP1–PP4 không đổi.
+# PP5 chạy ở Paper trade 5 (/paper5), bot trade thật /live (chọn PP5) và backtest (--methods 5). PP1–PP4 không đổi.
 # Giải thích: docs/PP5_DAILY_CYCLE.md, code: strategy/daily_cycle.py
 M5_DAILY_EMA_LEN = int(os.environ.get("M5_DAILY_EMA_LEN", "20"))          # EMA nến ngày (giống tab Biểu đồ)
 M5_DAILY_KLINES = int(os.environ.get("M5_DAILY_KLINES", "1000"))          # số nến ngày đã đóng dùng để tính
