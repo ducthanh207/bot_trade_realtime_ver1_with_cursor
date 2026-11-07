@@ -242,3 +242,51 @@ def resample_ohlcv(df_1m: pd.DataFrame, rule: str) -> pd.DataFrame:
     out.index = out.index.tz_convert(TZ_NAME)
     out.index.name = "timestamp"
     return out
+
+
+# ---------------------------------------------------------------------------
+# [2026-11-07] Nến ngày (1D) cho PP5 — lọc chu kỳ cần ~1000 ngày lịch sử, tải 1D trực tiếp
+# (1 request) thay vì tải hàng nghìn ngày nến 1m.
+# ---------------------------------------------------------------------------
+def _cache_1d(symbol: str) -> Path:
+    return CACHE_DIR / symbol.upper() / "1d.csv.gz"
+
+
+def download_1d(symbol: str, start: datetime, end: datetime, log=print) -> pd.DataFrame:
+    """Tải nến 1D trong [start, end) qua fapi, gộp với cache backtest/data_cache/<SYMBOL>/1d.csv.gz."""
+    symbol = symbol.upper()
+    path = _cache_1d(symbol)
+    old = _read_cache(path) if path.exists() else None
+    out, cur, end_ms = [], int(pd.Timestamp(start).timestamp() * 1000), int(pd.Timestamp(end).timestamp() * 1000)
+    while cur < end_ms:
+        data = _get_json(
+            f"{FAPI_BASE}/fapi/v1/klines",
+            {"symbol": symbol, "interval": "1d", "startTime": cur, "endTime": end_ms - 1, "limit": KLINES_LIMIT},
+            log,
+        )
+        if not data:
+            break
+        out.extend(data)
+        cur = int(data[-1][0]) + 86_400_000
+    df = _parse_kline_rows(out)
+    if old is not None and not old.empty:
+        df = pd.concat([old, df])
+        df = df[~df.index.duplicated(keep="last")].sort_index()
+    if not df.empty:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(path, compression="gzip")
+    log(f"  {symbol}: {len(df)} nến 1D trong cache")
+    return df
+
+
+def load_1d(symbol: str, end: datetime) -> pd.DataFrame:
+    """Nến 1D từ cache (index tz Asia/Bangkok, giờ mở 07:00 VN = 00:00 UTC). Chỉ đọc cache, không gửi request.
+    Nến mở >= end bị bỏ. Lọc 'đã đóng tại thời điểm t' do backtest làm."""
+    path = _cache_1d(symbol)
+    df = _read_cache(path) if path.exists() else None
+    if df is None or df.empty:
+        return pd.DataFrame(columns=COLS)
+    df = df[df.index < pd.Timestamp(end)]
+    df.index = df.index.tz_convert(TZ_NAME)
+    df.index.name = "timestamp"
+    return df

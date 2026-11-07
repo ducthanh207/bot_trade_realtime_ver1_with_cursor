@@ -5,12 +5,14 @@ METHOD_1 = "1"
 METHOD_2 = "2"
 METHOD_3 = "3"
 METHOD_4 = "4"
+METHOD_5 = "5"  # [2026-11-07] PP4 + lọc chu kỳ nến ngày; chưa gắn slot paper/live, chỉ chạy backtest
 
 _LABELS = {
     METHOD_1: "Phương pháp 1 — thoát cổ điển (4H + early + ATR trail + SL)",
     METHOD_2: "Phương pháp 2 — TP %change + lọc đảo chiều RSI 1H (4H/early chỉ khi lãi + đảo chiều)",
     METHOD_3: "Phương pháp 3 — Exit B (tầng mạnh: RSI slope) + EMA filter ADX>30 + Circuit breaker",
     METHOD_4: "Phương pháp 4 — nâng cấp PP3: Exit B thay early, hard stop % vốn, xác nhận RSI 1H, filter RSI extreme + ADX exhaustion",
+    METHOD_5: "Phương pháp 5 — PP4 + lọc chu kỳ nến ngày (EMA + %change): tăng chỉ LONG, giảm chỉ SHORT, đi ngang thì thoát nới",
 }
 
 
@@ -62,5 +64,12 @@ def describe_method(method: str = None) -> str:
             "grace ATR 2.5 tự siết về 2.2 sau 12h; hard stop mỗi lệnh theo % vốn (mặc định 10%); "
             "entry cần xác nhận hướng RSI 1H; chặn SHORT khi RSI quá bán / LONG khi RSI quá mua; "
             "giảm size khi ADX quá cao (exhaustion); giữ nguyên EMA50 filter, swing, streak sizing, circuit breaker của PP3."
+        )
+    if m == METHOD_5:
+        return (
+            "Phương pháp 5 (PP4 + chu kỳ nến ngày): giữ toàn bộ PP4; thêm chu kỳ theo giá đóng nến 1D so với EMA. "
+            "Tăng (2 nến đóng trên EMA hoặc đột biến %change) → chỉ LONG; giảm → chỉ SHORT; "
+            "đi ngang (3 nến sát EMA trong X = k×ATR ngày) → vào theo phía nến đóng gần nhất, "
+            "trailing nới + giảm size + chốt lời dải %change + Exit B đã sửa."
         )
     return "Phương pháp 1: thoát khi tín hiệu 4H / early / ATR trailing / thanh lý / trần lỗ như code gốc."

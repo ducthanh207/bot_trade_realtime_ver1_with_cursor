@@ -128,3 +128,25 @@ M4_TIME_STOP_HOURS = float(os.environ.get("M4_TIME_STOP_HOURS", "4.0"))
 M4_EARLY_CUT_ONLY_TIGHT = _env_bool("M4_EARLY_CUT_ONLY_TIGHT", "true")
 # (D) Grace mượt: hệ số ATR giảm dần tuyến tính 2.5→2.2 trong M4_ATR_GRACE_HOURS thay vì tụt một lần
 M4_SMOOTH_GRACE = _env_bool("M4_SMOOTH_GRACE")
+
+# ---------- [2026-11-07] Method 5 = PP4 + lọc chu kỳ nến ngày (1D) ----------
+# PP5 chưa gắn vào slot paper/live nào: hiện chỉ chạy trong backtest (--methods 5). PP1–PP4 không đổi.
+# Giải thích: docs/PP5_DAILY_CYCLE.md, code: strategy/daily_cycle.py
+M5_DAILY_EMA_LEN = int(os.environ.get("M5_DAILY_EMA_LEN", "20"))          # EMA nến ngày (giống tab Biểu đồ)
+M5_DAILY_KLINES = int(os.environ.get("M5_DAILY_KLINES", "1000"))          # số nến ngày đã đóng dùng để tính
+M5_CONFIRM_BARS = int(os.environ.get("M5_CONFIRM_BARS", "2"))             # số nến đóng liên tiếp trên/dưới EMA để vào/kết thúc chu kỳ
+M5_SPIKE_ENABLED = _env_bool("M5_SPIKE_ENABLED", "true")                  # đột biến: dải %change cắt qua EMA → vào chu kỳ ngay
+M5_PCT_LOOKBACK_TRADES = int(os.environ.get("M5_PCT_LOOKBACK_TRADES", "15"))  # lookback %change trên nến ngày
+# Đi ngang: N nến gần nhất đều có |close − EMA| / EMA <= X
+M5_SIDEWAYS_BARS = int(os.environ.get("M5_SIDEWAYS_BARS", "3"))
+M5_SIDEWAYS_MODE = os.environ.get("M5_SIDEWAYS_MODE", "atr").strip().lower()  # atr: X = k × ATR14(1D)/close | pct: X cố định
+M5_SIDEWAYS_ATR_K = float(os.environ.get("M5_SIDEWAYS_ATR_K", "1.0"))
+M5_SIDEWAYS_PCT = float(os.environ.get("M5_SIDEWAYS_PCT", "3.0"))         # % (khi MODE=pct)
+# Đi ngang mà nến nằm lẫn hai phía EMA: latest = theo giá đóng nến gần nhất | both = vào cả hai phía | skip = bỏ lệnh
+M5_SIDEWAYS_MIXED = os.environ.get("M5_SIDEWAYS_MIXED", "latest").strip().lower()
+# Gói "thoát nới" cho lệnh vào lúc đi ngang
+M5_WIDE_ATR_MULTIPLIER = float(os.environ.get("M5_WIDE_ATR_MULTIPLIER", "3.5"))  # trailing cố định, không siết sau 12h
+M5_WIDE_SIZE_MULT = float(os.environ.get("M5_WIDE_SIZE_MULT", "0.6"))            # giảm size → hard stop % vốn tự giãn ra
+M5_WIDE_PCT_TP = _env_bool("M5_WIDE_PCT_TP", "true")                             # chốt lời ở dải %change 4H (như PP2)
+# Exit B đã sửa (dùng RSI nến 4H đã đóng): wide = chỉ lệnh đi ngang | all = mọi lệnh PP5 | off = như PP4 (không chạy)
+M5_EXIT_B = os.environ.get("M5_EXIT_B", "wide").strip().lower()
