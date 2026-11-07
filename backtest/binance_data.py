@@ -159,6 +159,16 @@ def _month_iter(start: date, end: date):
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
 
 
+def _write_cache(df: pd.DataFrame, path: Path) -> None:
+    """Ghi cache an toàn khi nhiều backtest chạy song song: ghi file tạm rồi đổi tên (không ai đọc được file dở)."""
+    import os
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    df.to_csv(tmp, compression="gzip")
+    os.replace(tmp, path)
+
+
 def _read_cache(path: Path) -> pd.DataFrame | None:
     if not path.exists():
         return None
@@ -203,8 +213,7 @@ def _load_month(symbol: str, y: int, m: int, log=print, source: str = "api") -> 
     df = df[(df.index >= month_start) & (df.index < until)]
     df = df[~df.index.duplicated()].sort_index()
     if not df.empty:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(cache, compression="gzip")
+        _write_cache(df, cache)
     return df
 
 
@@ -273,8 +282,7 @@ def download_1d(symbol: str, start: datetime, end: datetime, log=print) -> pd.Da
         df = pd.concat([old, df])
         df = df[~df.index.duplicated(keep="last")].sort_index()
     if not df.empty:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(path, compression="gzip")
+        _write_cache(df, path)
     log(f"  {symbol}: {len(df)} nến 1D trong cache")
     return df
 

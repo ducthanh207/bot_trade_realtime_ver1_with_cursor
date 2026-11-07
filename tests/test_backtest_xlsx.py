@@ -63,3 +63,29 @@ def test_xlsx_endpoint():
     assert r.status_code == 200 and r.data[:2] == b"PK"
     assert "backtest_PP4_BTCUSDT" in r.headers["Content-Disposition"]
     assert c.get("/api/backtest/job/khong_co/xlsx").status_code == 404
+
+
+def test_web_jobs_run_in_parallel(monkeypatch):
+    """[2026-11-07] Backtest ở các tab chạy song song (tới MAX_PARALLEL), không xếp hàng từng cái một."""
+    import subprocess
+    import threading
+    from backtest import web_backtest as wb
+
+    active, peak, lock = [0], [0], threading.Lock()
+
+    def fake_run(*a, **k):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.5)
+        with lock:
+            active[0] -= 1
+        return subprocess.CompletedProcess(a, 0, stdout=wb.RESULT_PREFIX + '{"ok": 1}', stderr="")
+
+    monkeypatch.setattr(wb.subprocess, "run", fake_run)
+    ids = [wb.submit(method=str(m)) for m in (1, 2, 3, 4)]
+    deadline = time.time() + 5
+    while time.time() < deadline and any(wb.status(i)["state"] == "running" for i in ids):
+        time.sleep(0.05)
+    assert all(wb.status(i)["state"] == "done" for i in ids)
+    assert peak[0] == wb.MAX_PARALLEL

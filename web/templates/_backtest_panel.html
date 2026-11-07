@@ -185,7 +185,7 @@
   $("btnBtReopen").addEventListener("click", function() { if (last) openModal(last.d, last.jobId); });
   window.addEventListener("resize", function() { if (last && $("btModal").classList.contains("open")) drawChart(last.d); });
 
-  function done(btn, res, d, jobId) {
+  function done(btn, res, d, jobId, popup) {
     btn.disabled = false; btn.textContent = "Chạy backtest";
     if (d.error) { res.textContent = "Lỗi: " + d.error; res.style.color = "#f66"; return; }
     var reasons = Object.keys(d.exit_reasons || {}).map(function(k) { return k + " " + d.exit_reasons[k]; }).join(", ");
@@ -199,26 +199,47 @@
       reasons ? "Thoát: " + reasons : ""
     ].filter(Boolean).join(" | ");
     showTrades(d.trades);
-    if (jobId) openModal(d, jobId);
+    if (jobId) {
+      last = {d: d, jobId: jobId};
+      $("btnBtReopen").style.display = "";
+      if (popup !== false) openModal(d, jobId);
+    }
   }
+
+  // [2026-11-07] Job backtest chạy trên server, độc lập với trang. Lưu mã job theo từng tab Paper để
+  // chuyển sang tab khác rồi quay lại vẫn theo dõi tiếp / xem lại kết quả (server giữ kết quả 1 giờ).
+  var KEY = "bt_job:" + API;
+  function saveJob(v) { try { if (v) localStorage.setItem(KEY, JSON.stringify(v)); else localStorage.removeItem(KEY); } catch (e) {} }
+  function loadJob() { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { return null; } }
 
   function poll(jobId, btn, res) {
     fetch("/api/backtest/job/" + jobId).then(function(r) { return r.json(); }).then(function(d) {
       if (d.state === "running") {
-        res.textContent = "Đang tải dữ liệu 1m và phát lại... " + d.elapsed_sec + "s (lần đầu có thể mất 1–3 phút)";
+        res.style.color = "#fc6";
+        res.textContent = d.queued
+          ? "Đang xếp hàng chờ backtest khác chạy xong... " + d.elapsed_sec + "s"
+          : "Đang tải dữ liệu 1m và phát lại... " + d.elapsed_sec + "s (lần đầu có thể mất 1–3 phút). Có thể chuyển tab, backtest vẫn chạy.";
         setTimeout(function() { poll(jobId, btn, res); }, 2000);
+      } else if (d.state === "unknown") {
+        saveJob(null);
+        done(btn, res, {error: "Không còn kết quả backtest trước (bot đã khởi động lại hoặc quá 1 giờ)"});
       } else {
-        done(btn, res, d, jobId);
+        var job = loadJob() || {};
+        var popup = !job.seen;  // chỉ tự bật popup lần đầu thấy kết quả
+        saveJob({id: jobId, seen: true});
+        done(btn, res, d, jobId, popup);
       }
     }).catch(function() { setTimeout(function() { poll(jobId, btn, res); }, 4000); });
   }
+
+  function running(btn) { btn.disabled = true; btn.textContent = "Đang chạy..."; }
 
   $("btnBacktest").addEventListener("click", function() {
     var btn = this, res = $("backtestResult");
     var capital = parseFloat($("btCapital").value);
     if (!$("btStartDate").value) { alert("Chọn ngày bắt đầu"); return; }
     if (!capital || capital <= 0) { alert("Vốn phải > 0"); return; }
-    btn.disabled = true; btn.textContent = "Đang chạy...";
+    running(btn);
     res.textContent = "Đang gửi yêu cầu..."; res.style.color = "#fc6";
     $("backtestTrades").style.display = "none";
     fetch(API + "/backtest", {
@@ -229,8 +250,17 @@
       })
     }).then(function(r) { return r.json(); }).then(function(d) {
       if (d.error) { done(btn, res, d); return; }
+      saveJob({id: d.job_id, seen: false});
       poll(d.job_id, btn, res);
     }).catch(function(e) { done(btn, res, {error: "Lỗi kết nối: " + e}); });
   });
+
+  // Mở lại trang: có job đang chạy → theo dõi tiếp; đã xong → hiện lại kết quả (popup chỉ bật nếu chưa xem)
+  var pending = loadJob();
+  if (pending && pending.id) {
+    running($("btnBacktest"));
+    $("backtestResult").textContent = "Đang lấy lại backtest trước...";
+    poll(pending.id, $("btnBacktest"), $("backtestResult"));
+  }
 })();
 </script>
