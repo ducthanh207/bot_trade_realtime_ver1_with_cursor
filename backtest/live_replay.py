@@ -97,8 +97,11 @@ class MarketData:
 
     WINDOW = 200  # số nến live lấy về: get_klines_4h(limit=200), get_klines_1h(limit=200)
 
-    def __init__(self, symbol: str, df_1m: pd.DataFrame, strict: bool = True, df_1d: pd.DataFrame = None):
+    def __init__(self, symbol: str, df_1m: pd.DataFrame, strict: bool = True, df_1d: pd.DataFrame = None,
+                 ind_cache=None):
         self.symbol = symbol
+        # [2026-11-08] bộ nhớ chỉ báo trên đĩa (backtest/indicator_cache.py); None = không dùng
+        self.ind_cache = ind_cache
         # [2026-11-07] nến 1D cho PP5 (index giờ mở, tz VN). Tại t chỉ dùng nến đã đóng: giờ mở + 1 ngày <= t.
         self.df_1d = df_1d if df_1d is not None else pd.DataFrame()
         self._daily_cache = {}
@@ -155,9 +158,40 @@ class MarketData:
         h = self.idx[i].floor("h") - H1
         v = self._atr_cache.get(h)
         if v is None:
-            ind = add_indicators(self._past(self.df1h_raw, h))
+            ind = self._ind1_tail(h)
             v = float(ind["ATR"].iloc[-1]) if len(ind) and ind.index[-1] == h else float("nan")
             self._atr_cache[h] = v
+        return v
+
+    def _ind1_tail(self, h) -> pd.DataFrame:
+        """2 dòng cuối add_indicators trên cửa sổ 1H có nến đóng cuối mở lúc h (đọc bộ nhớ nếu có)."""
+        c = self.ind_cache
+        if c is not None:
+            v = c.get1(h)
+            if v is not None:
+                return v
+        raw1 = self._past(self.df1h_raw, h)
+        ind1 = add_indicators(raw1).tail(2)
+        if c is not None and len(raw1) == self.WINDOW - 1:  # chỉ lưu cửa sổ đủ nến như live
+            c.put1(h, ind1)
+        return ind1
+
+    def _ind4_rows(self, t_closed):
+        """(row_closed, prev_row_closed, row_m3) trên cửa sổ 4H có nến đóng cuối mở lúc t_closed."""
+        c = self.ind_cache
+        if c is not None:
+            v = c.get4(t_closed)
+            if v is not None:
+                return v
+        raw4 = self._past(self.df4_raw, t_closed)
+        ind4 = add_indicators(raw4)
+        if len(ind4) < 2:
+            return None
+        m3 = self._m3(raw4)
+        row_m3 = m3.iloc[-1] if len(m3) and m3.index[-1] == t_closed else None
+        v = (ind4.iloc[-1], ind4.iloc[-2], row_m3)
+        if c is not None and len(raw4) == self.WINDOW - 1:
+            c.put4(t_closed, v)
         return v
 
     def daily_at(self, t) -> dict:
@@ -180,14 +214,14 @@ class MarketData:
         t_closed, t_prev = t - H4, t - 2 * H4
         if self.strict:
             raw4 = self._past(self.df4_raw, t_closed)
-            ind4 = add_indicators(raw4)
-            if len(ind4) < 2 or ind4.index[-1] != t_closed or ind4.index[-2] != t_prev:
+            rows = self._ind4_rows(t_closed)
+            if rows is None or rows[0].name != t_closed or rows[1].name != t_prev:
                 return None
-            m3 = self._m3(raw4)
-            row_m3 = m3.iloc[-1] if len(m3) and m3.index[-1] == t_closed else None
-            regime = classify_regime(m3) if settings.M4_REGIME_ENABLED and row_m3 is not None else {}
-            raw1 = self._past(self.df1h_raw, t - H1)
-            ind1 = add_indicators(raw1)
+            row_closed, prev_row_closed, row_m3 = rows
+            regime = {}
+            if settings.M4_REGIME_ENABLED and row_m3 is not None:  # cần cả chuỗi M3 → tính, không lưu
+                regime = classify_regime(self._m3(raw4))
+            ind1 = self._ind1_tail(t - H1)
             if len(ind1) >= 2 and ind1.index[-1] == t - H1:
                 last = ind1.iloc[[-1]].copy()
                 last.index = pd.DatetimeIndex([t], name=ind1.index.name)
@@ -195,7 +229,7 @@ class MarketData:
             else:
                 df_1h = pd.DataFrame()
             return {
-                "row_closed": ind4.iloc[-1], "prev_row_closed": ind4.iloc[-2], "row_m3": row_m3,
+                "row_closed": row_closed, "prev_row_closed": prev_row_closed, "row_m3": row_m3,
                 "df_1h": df_1h, "df_4h_raw": self._with_forming(raw4, t, open_px),
                 "regime": regime,  # [2026-11-01]
             }
@@ -615,8 +649,15 @@ def _backtest_one(job):
         df_1d = load_1d(sym, end)
         if df_1d.empty:  # không tải được 1D → gộp từ 1m (lịch sử ngắn: %change ngày có thể chưa có)
             df_1d = resample_ohlcv(df_1m, "24h")
-    md = MarketData(sym, df_1m, strict=not a["fast"], df_1d=df_1d)
+    cache = None
+    if not a["fast"] and not a.get("no_cache"):
+        from backtest.indicator_cache import IndicatorCache
+
+        cache = IndicatorCache(sym)
+    md = MarketData(sym, df_1m, strict=not a["fast"], df_1d=df_1d, ind_cache=cache)
     slots = run_symbol(md, start, a["methods"], a["capital"], a["leverage"], a["wallet_pct"], a["lookback_trades"])
+    if cache is not None:
+        cache.save()
     res = {"summaries": [], "months": [], "trades": []}
     for s in slots:
         res["summaries"].append(summarize(sym, s, a["capital"], start, end))
@@ -650,6 +691,8 @@ def main(argv=None):
     p.add_argument("--download-workers", type=int, default=3, help="Số luồng tải dữ liệu (dùng chung giới hạn weight)")
     p.add_argument("--max-weight", type=int, default=1200, help="Weight API tối đa mỗi phút (Binance cho 2400/IP)")
     p.add_argument("--fast", action="store_true", help="Tính chỉ báo 1 lần trên toàn chuỗi (nhanh ~4 lần, kết quả như strict)")
+    p.add_argument("--no-cache", action="store_true",
+                   help="Không dùng bộ nhớ chỉ báo trên đĩa (backtest/data_cache/<SYM>/ind_*.pkl) ở chế độ strict")
     p.add_argument("--out", default=None, help="Thư mục kết quả (mặc định backtest/results/<thời điểm chạy>)")
     a = p.parse_args(argv)
 
@@ -711,7 +754,7 @@ def main(argv=None):
     workers = a.workers or max(1, (os.cpu_count() or 2) - 1)
     mode = "nhanh (--fast)" if a.fast else "strict: chỉ dùng nến đã đóng tại từng thời điểm"
     print(f"Backtest {', '.join('PP' + m for m in a.methods)} | {workers} process | chế độ {mode}")
-    args = {k: getattr(a, k) for k in ("set", "warmup_days", "fast", "methods", "capital", "leverage", "wallet_pct", "lookback_trades")}
+    args = {k: getattr(a, k) for k in ("set", "warmup_days", "fast", "methods", "capital", "leverage", "wallet_pct", "lookback_trades", "no_cache")}
     jobs = [{"symbol": s, "start": start, "end": end, "args": args} for s in symbols]
     summaries, all_trades, months = [], [], []
     with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as ex:

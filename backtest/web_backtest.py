@@ -75,9 +75,14 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
         df_1d = binance_data.load_1d(symbol, end_dt)
         if df_1d.empty:
             df_1d = binance_data.resample_ohlcv(df_1m, "24h")
-    md = MarketData(symbol, df_1m, strict=True, df_1d=df_1d)
+    # [2026-11-08] bộ nhớ chỉ báo trên đĩa: chạy lại khoảng đã chạy (hoặc 1 tháng trong đó) chỉ việc đọc
+    from backtest.indicator_cache import IndicatorCache
+
+    cache = IndicatorCache(symbol)
+    md = MarketData(symbol, df_1m, strict=True, df_1d=df_1d, ind_cache=cache)
     slot = run_symbol(md, pd.Timestamp(start_dt), [str(method)], float(initial_capital),
                       float(leverage), float(wallet_pct), int(lookback_trades))[0]
+    cache.save()
 
     trades = [{k: _jsonable(v) for k, v in t.items()} for t in slot.trades]
     wins = sum(1 for t in slot.trades if t["profit"] > 0)

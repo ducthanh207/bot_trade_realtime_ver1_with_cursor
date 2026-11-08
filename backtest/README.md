@@ -55,6 +55,7 @@ các nến đã đóng trước t (cửa sổ 200 nến như bot live lấy từ
 - Bước tải chạy trước, nhiều luồng nhưng dùng chung một bộ đếm weight (mặc định 1200 trong giới hạn 2400 weight/phút của Binance, mỗi lần lấy 1500 nến tốn 10 weight).
 - Đọc header `X-MBX-USED-WEIGHT-1M`, tự nghỉ khi gần ngưỡng; gặp 429/418 thì nghỉ đúng `Retry-After` rồi thử lại.
 - Cache theo tháng trong `backtest/data_cache/`; tháng đang chạy chỉ tải phần còn thiếu. Bước backtest song song chỉ đọc cache, không gửi request.
+- [2026-11-08] Chế độ strict còn lưu chỉ báo đã tính (4H/1H theo từng mốc nến đã đóng) vào `backtest/data_cache/<SYM>/ind_*.pkl`, dùng chung cho script và nút backtest trên web. Chạy 1 năm xong, chạy lại cả năm hoặc 1 tháng bất kỳ trong đó nhanh hơn ~4 lần, kết quả y hệt. `--no-cache` để tắt; xoá file = tính lại từ đầu. File đổi tên tự động khi tham số chỉ báo (M3_EMA_TREND_LEN, M3_SWING_LOOKBACK) đổi.
 - Một năm 1 cặp ≈ 350 request ≈ 3 phút ở lần tải đầu; các lần sau gần như tức thì.
 
 ## Kết quả (`backtest/results/<thời điểm chạy>/`)
