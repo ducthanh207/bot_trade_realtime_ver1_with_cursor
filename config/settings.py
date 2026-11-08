@@ -150,3 +150,8 @@ M5_WIDE_SIZE_MULT = float(os.environ.get("M5_WIDE_SIZE_MULT", "0.6"))           
 M5_WIDE_PCT_TP = _env_bool("M5_WIDE_PCT_TP", "true")                             # chốt lời ở dải %change 4H (như PP2)
 # Exit B đã sửa (dùng RSI nến 4H đã đóng): wide = chỉ lệnh đi ngang | all = mọi lệnh PP5 | off = như PP4 (không chạy)
 M5_EXIT_B = os.environ.get("M5_EXIT_B", "wide").strip().lower()
+# [2026-11-08] Lệnh ngược chu kỳ: thay vì chặn hẳn thì cho vào với size × hệ số này. 0 = chặn (như cũ).
+# LONG khi chu kỳ GIẢM / đi ngang thiên SHORT; SHORT khi chu kỳ TĂNG / đi ngang thiên LONG.
+# Ví dụ M5_COUNTER_LONG_SIZE=1.0 → chỉ còn chặn SHORT khi chu kỳ tăng; 0.5 → LONG đánh hồi với nửa size.
+M5_COUNTER_LONG_SIZE = float(os.environ.get("M5_COUNTER_LONG_SIZE", "0"))
+M5_COUNTER_SHORT_SIZE = float(os.environ.get("M5_COUNTER_SHORT_SIZE", "0"))

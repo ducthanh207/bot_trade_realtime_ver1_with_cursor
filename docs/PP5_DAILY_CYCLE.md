@@ -49,6 +49,15 @@ size × 0.6 (hard stop tính theo % vốn nên tự giãn ra, số tiền lỗ t
 | M5_WIDE_SIZE_MULT | 0.6 | Hệ số size khi đi ngang |
 | M5_WIDE_PCT_TP | true | Chốt lời dải %change khi đi ngang |
 | M5_EXIT_B | wide | Exit B đã sửa: wide (lệnh đi ngang) / all / off |
+| M5_COUNTER_LONG_SIZE | 0 | [2026-11-08] LONG khi chu kỳ GIẢM / đi ngang thiên SHORT: 0 = chặn, > 0 = vào với size × hệ số |
+| M5_COUNTER_SHORT_SIZE | 0 | Như trên cho SHORT khi chu kỳ TĂNG / đi ngang thiên LONG |
+
+**Lệnh ngược chu kỳ (2026-11-08).** Backtest BTC 2026 cho thấy PP5 chặn cả các lệnh LONG đánh hồi trong
+xu hướng giảm (tổng +18% vốn), trong khi chặn SHORT lúc chu kỳ tăng là đúng (tránh -11%). Nút backtest PP5
+trên web có ô "Lệnh ngược chu kỳ" để thử: LONG ngược × 0.5, LONG ngược × 1 (chỉ chặn SHORT khi tăng), hoặc
+cả hai chiều × 0.5. Ô này chỉ áp cho job backtest đó, không đổi .env, paper hay trade thật. Muốn bot dùng
+thật thì đặt `M5_COUNTER_LONG_SIZE` / `M5_COUNTER_SHORT_SIZE` trong .env rồi restart. Script:
+`--set M5_COUNTER_LONG_SIZE=0.5`. Excel có thêm cột "Ngược chu kỳ (PP5)".
 
 ## Backtest (chạy trên máy anh)
 

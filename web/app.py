@@ -1188,10 +1188,18 @@ def _start_web_backtest(slot: int):
     wallet_pct = float(data.get("wallet_pct") or get_wct() or _cfg.WALLET_PCT)
     wallet_pct = wallet_pct / 100.0 if wallet_pct > 1 else wallet_pct
     symbol = str(data.get("symbol") or getattr(_cfg, "SYMBOL", "BTCUSDT")).upper()
+    # [2026-11-08] PP5: thử lệnh ngược chu kỳ ngay trên web (chỉ trong job backtest, không đổi .env)
+    overrides = {}
+    if slot == 5:
+        overrides = {
+            "long05": {"M5_COUNTER_LONG_SIZE": 0.5},
+            "long1": {"M5_COUNTER_LONG_SIZE": 1.0},
+            "both05": {"M5_COUNTER_LONG_SIZE": 0.5, "M5_COUNTER_SHORT_SIZE": 0.5},
+        }.get(str(data.get("counter") or ""), {})
     job_id = web_backtest.submit(
         method=str(slot), symbol=symbol, start=start_str, end=end_str,
         initial_capital=initial_capital, leverage=leverage, wallet_pct=wallet_pct,
-        lookback_trades=int(getattr(_cfg, "LOOKBACK_TRADES", 15)),
+        lookback_trades=int(getattr(_cfg, "LOOKBACK_TRADES", 15)), overrides=overrides,
     )
     return jsonify({"ok": True, "job_id": job_id, "symbol": symbol, "leverage": leverage, "wallet_pct": wallet_pct})
 
