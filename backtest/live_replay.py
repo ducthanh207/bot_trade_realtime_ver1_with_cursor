@@ -54,7 +54,7 @@ from strategy.regime import (
     m4_apply_regime_to_payload,
     m4_invalidation_hit,
 )
-from strategy.daily_cycle import daily_cycle_info, m5_entry_decision, m5_apply_cycle_to_payload
+from strategy.daily_cycle import daily_cycle_info, m5_entry_plan, m5_apply_cycle_to_payload
 
 H1 = pd.Timedelta(hours=1)
 H4 = pd.Timedelta(hours=4)
@@ -351,6 +351,7 @@ class SlotSim:
             # [2026-11-07] PP5: chu kỳ ngày lúc vào lệnh (trống với PP1–PP4)
             "cycle": ot.get("m5_cycle"),
             "cycle_wide": ot.get("m5_wide"),
+            "cycle_counter": ot.get("m5_counter"),
             "cycle_d_pct": ot.get("m5_d_pct"),
             "cycle_x_pct": ot.get("m5_x_pct"),
         })
@@ -403,10 +404,10 @@ class SlotSim:
                 return
 
         # [2026-11-07] PP5 lọc chu kỳ nến ngày — giống bot/slot_engine.step_slot
-        m5_info, m5_wide = {}, False
+        m5_info, m5_wide, m5_size, m5_counter = {}, False, 1.0, False
         if method == METHOD_5:
             m5_info = md.daily_at(t)
-            allow_cycle, m5_wide = m5_entry_decision(side, m5_info.get("cycle"))
+            allow_cycle, m5_wide, m5_size, m5_counter = m5_entry_plan(side, m5_info.get("cycle"))
             if not allow_cycle:
                 return
 
@@ -435,6 +436,8 @@ class SlotSim:
             size_mult *= m3_streak_multiplier(self.losses)
         if method == METHOD_5 and m5_wide:
             size_mult *= float(settings.M5_WIDE_SIZE_MULT)
+        if method == METHOD_5 and m5_counter:  # [2026-11-08] lệnh ngược chu kỳ (mặc định không có)
+            size_mult *= float(m5_size)
 
         size, margin, notional = size_and_margin(self.balance, entry_px, leverage=self.leverage, wallet_pct=self.wallet_pct)
         if method in _M3_FAMILY and size_mult < 1.0:
@@ -480,7 +483,7 @@ class SlotSim:
                 m4_apply_regime_to_payload(ot, side, m4_regime, m4_tight, row_closed)
         if method == METHOD_5:
             ot["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
-            m5_apply_cycle_to_payload(ot, side, m5_info, m5_wide)
+            m5_apply_cycle_to_payload(ot, side, m5_info, m5_wide, m5_counter)
         self.open_trade = ot
         self.balance -= fee_in
         self._prepare_risk()

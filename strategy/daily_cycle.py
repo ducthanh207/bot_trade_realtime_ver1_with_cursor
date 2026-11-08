@@ -194,8 +194,25 @@ def m5_entry_decision(side: str, cycle: str | None):
     return False, False
 
 
-def m5_apply_cycle_to_payload(payload: dict, side: str, info: dict, wide: bool) -> None:
+_AGAINST = {CYCLE_UP: "SHORT", CYCLE_SIDE_LONG: "SHORT", CYCLE_DOWN: "LONG", CYCLE_SIDE_SHORT: "LONG"}
+
+
+def m5_entry_plan(side: str, cycle: str | None):
+    """[2026-11-08] Trả (allow, wide, size_mult, counter). Như m5_entry_decision, nhưng lệnh ngược chu kỳ
+    được vào với size × M5_COUNTER_LONG_SIZE / M5_COUNTER_SHORT_SIZE khi hệ số > 0 (mặc định 0 = chặn)."""
+    allow, wide = m5_entry_decision(side, cycle)
+    if allow:
+        return True, wide, 1.0, False
+    if _AGAINST.get(cycle) == side:
+        k = float(settings.M5_COUNTER_LONG_SIZE if side == "LONG" else settings.M5_COUNTER_SHORT_SIZE)
+        if k > 0:
+            return True, cycle in (CYCLE_SIDE_LONG, CYCLE_SIDE_SHORT), k, True
+    return False, False, 1.0, False
+
+
+def m5_apply_cycle_to_payload(payload: dict, side: str, info: dict, wide: bool, counter: bool = False) -> None:
     """Ghi chu kỳ vào lệnh vừa mở; lệnh đi ngang → hệ số trailing nới + stop ban đầu tương ứng."""
+    payload["m5_counter"] = bool(counter)
     payload["m5_cycle"] = info.get("cycle")
     payload["m5_d_pct"] = info.get("d")
     payload["m5_x_pct"] = info.get("x")

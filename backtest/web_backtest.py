@@ -32,6 +32,7 @@ import pandas as pd
 
 WARMUP_DAYS = 40  # live đọc 200 nến 4H (~34 ngày) → cần ít nhất chừng đó dữ liệu trước ngày bắt đầu
 MAX_DAYS = 400
+OVERRIDABLE = ("M5_COUNTER_LONG_SIZE", "M5_COUNTER_SHORT_SIZE")
 
 
 def _jsonable(v):
@@ -45,10 +46,19 @@ def _jsonable(v):
 
 
 def run_web_backtest(method: str, symbol: str, start: str, end: str | None, initial_capital: float,
-                     leverage: float, wallet_pct: float, lookback_trades: int = 15) -> dict:
+                     leverage: float, wallet_pct: float, lookback_trades: int = 15, overrides: dict | None = None) -> dict:
     """Chạy trong process con. start/end: 'YYYY-MM-DD' theo giờ VN; end tính hết ngày đó (tối đa tới phút đã đóng gần nhất)."""
     from backtest import binance_data
     from backtest.live_replay import MarketData, run_symbol
+
+    from config import settings as _st
+
+    # [2026-11-08] chỉ cho đổi vài tham số PP5 an toàn (process con, không ghi .env)
+    applied = {}
+    for k, v in (overrides or {}).items():
+        if k in OVERRIDABLE:
+            setattr(_st, k, float(v))
+            applied[k] = float(v)
 
     tz7 = timezone(timedelta(hours=7))
     start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=tz7)
@@ -110,6 +120,7 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
         "final_balance": round(float(slot.balance), 4),
         "max_drawdown_pct": round(max_dd, 2),
         "exit_reasons": reasons,
+        "overrides": applied,
         "trades": trades,
     }
 
