@@ -77,6 +77,15 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
         # [2026-11-07] PP5: như PP4 gốc; lệnh vào lúc đi ngang dùng hệ số nới cố định
         from strategy.daily_cycle import m5_trailing_multiplier
         mult = m5_trailing_multiplier(open_trade, getattr(row_1m, "name", None))
+    elif str(open_trade.get("trading_method", "")) == "6":
+        # [2026-11-14] PP6: hệ số PP4 gốc (grace 2.5 trong 12h rồi 2.2); CVD 1H ngược lệnh → siết
+        from strategy.cvd import cvd_trailing_multiplier
+        mult = cvd_trailing_multiplier(open_trade, _m4_mult_at(open_trade.get("entry_time"), getattr(row_1m, "name", None)))
+    elif str(open_trade.get("trading_method", "")) == "6.1":
+        # [2026-11-14] PP6.1: hệ số PP5 (lệnh đi ngang nới cố định); CVD 1H ngược lệnh → siết
+        from strategy.daily_cycle import m5_trailing_multiplier
+        from strategy.cvd import cvd_trailing_multiplier
+        mult = cvd_trailing_multiplier(open_trade, m5_trailing_multiplier(open_trade, getattr(row_1m, "name", None)))
     else:
         mult = open_trade.get("atr_multiplier_override") or settings.ATR_MULTIPLIER
     trail_dist = atr * mult

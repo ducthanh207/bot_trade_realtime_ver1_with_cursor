@@ -30,17 +30,21 @@ from strategy import (
     compute_exit_candidates,
     pick_best_exit,
 )
-from strategy.strategies.registry import uses_pct_change_bands, METHOD_3, METHOD_4, METHOD_5
+from strategy.strategies.registry import uses_pct_change_bands, METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61
 from strategy.indicators import add_indicators_m3
 from strategy.risk import m3_adx_zone, m3_streak_multiplier, m3_atr_multiplier, m4_adx_zone
 from strategy.signals import m4_entry_1h_confirm, m4_entry_rsi_extreme_block
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 from strategy.regime import classify_regime, m4_regime_entry_decision, m4_apply_regime_to_payload
 from strategy.daily_cycle import daily_cycle_info, m5_entry_plan, m5_apply_cycle_to_payload
+from strategy.cvd import has_taker, last_ratio, resample_4h, cvd_entry_ok, m61_entry_plan, apply_cvd_to_payload
 
 # Các phương pháp dùng chung khung PP3/PP4 (circuit breaker, ADX/EMA50/swing/streak). PP5 = PP4 + chu kỳ ngày.
-_M3_FAMILY = (METHOD_3, METHOD_4, METHOD_5)
-_M4_FAMILY = (METHOD_4, METHOD_5)
+# [2026-11-14] PP6 = PP4 + CVD, PP6.1 = PP5 + CVD (strategy/cvd.py)
+_M3_FAMILY = (METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61)
+_M4_FAMILY = (METHOD_4, METHOD_5, METHOD_6, METHOD_61)
+_M5_FAMILY = (METHOD_5, METHOD_61)
+_CVD_FAMILY = (METHOD_6, METHOD_61)
 
 _tz_app = getattr(settings, "GMT7", timezone.utc)
 
@@ -135,6 +139,7 @@ class MarketContext:
         self._row_m3_done = False
         self._df_4h_m3_closed = None  # [2026-11-01] nến 4H đã đóng + indicator M3, dùng cho classify_regime
         self._regime = None
+        self._cvd = None
 
     @property
     def ok(self) -> bool:
@@ -186,6 +191,21 @@ class MarketContext:
                 df = df[df.index + pd.Timedelta(days=1) <= pd.Timestamp(now)]
             self._daily = daily_cycle_info(df)
         return self._daily
+
+    def cvd_info(self) -> dict:
+        """[2026-11-14] Độ dốc CVD (PP6/PP6.1) trên nến 4H/1H đã đóng; cần cột taker_buy, thiếu → giá trị None."""
+        if self._cvd is None:
+            r4 = r1 = rs = None
+            closed_4h = self.df_4h_raw.iloc[:-1] if has_taker(self.df_4h_raw) else None
+            if closed_4h is None and has_taker(self.df_1h):
+                closed_4h = resample_4h(self.df_1h.iloc[:-1])
+            if closed_4h is not None:
+                r4 = last_ratio(closed_4h, settings.M6_4H_BARS)
+                rs = last_ratio(closed_4h, settings.M61_SIDE_CVD_BARS)
+            if has_taker(self.df_1h):
+                r1 = last_ratio(self.df_1h.iloc[:-1], settings.M6_1H_BARS)
+            self._cvd = {"r4": r4, "r1": r1, "r_side": rs}
+        return self._cvd
 
     def regime_info(self) -> dict:
         """[2026-11-01] Giai đoạn thị trường (UP/DOWN/RANGE) trên nến 4H đã đóng — tính một lần mỗi vòng."""
@@ -345,11 +365,19 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
 
     # [2026-11-07] PP5: lọc chu kỳ nến ngày — chỉ vào phía cho phép; đi ngang → lệnh "nới"
     m5_info, m5_wide, m5_size, m5_counter = {}, False, 1.0, False
-    if method == METHOD_5:
+    cvd = mkt.cvd_info() if method in _CVD_FAMILY else {}
+    if method in _M5_FAMILY:
         m5_info = mkt.daily_info()
-        allow_cycle, m5_wide, m5_size, m5_counter = m5_entry_plan(side, m5_info.get("cycle"))
+        if method == METHOD_61:  # [2026-11-14] PP6.1: đi ngang chọn phía theo CVD (M61_SIDEWAYS_BIAS)
+            allow_cycle, m5_wide, m5_size, m5_counter = m61_entry_plan(side, m5_info.get("cycle"), cvd.get("r_side"))
+        else:
+            allow_cycle, m5_wide, m5_size, m5_counter = m5_entry_plan(side, m5_info.get("cycle"))
         if not allow_cycle:
             return None
+
+    # [2026-11-14] PP6 / PP6.1: CVD 4H (và tuỳ chọn 1H) phải cùng chiều lệnh
+    if method in _CVD_FAMILY and not cvd_entry_ok(side, cvd.get("r4"), cvd.get("r1")):
+        return None
 
     # Method 3/4 entry filters
     m3_size_mult = 1.0
@@ -387,9 +415,9 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
         # Streak multiplier
         streak_mult = m3_streak_multiplier((cb or {}).get("get_losses", lambda: 0)())
         m3_size_mult = m3_size_mult * streak_mult
-    if method == METHOD_5 and m5_wide:
+    if method in _M5_FAMILY and m5_wide:
         m3_size_mult = m3_size_mult * float(settings.M5_WIDE_SIZE_MULT)
-    if method == METHOD_5 and m5_counter:  # [2026-11-08] lệnh ngược chu kỳ (mặc định không có)
+    if method in _M5_FAMILY and m5_counter:  # [2026-11-08] lệnh ngược chu kỳ (mặc định không có)
         m3_size_mult = m3_size_mult * float(m5_size)
 
     entry_px = float(df_1m["close"].iloc[-1]) if not df_1m.empty else float(row_closed["close"])
@@ -442,10 +470,13 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
         # [2026-11-01] lưu giai đoạn + đỉnh/đáy nến tín hiệu; lệnh "chặt" đổi hệ số ATR và stop ban đầu
         if getattr(settings, "M4_REGIME_ENABLED", False) or getattr(settings, "M4_INVALIDATION_EXIT", False):
             m4_apply_regime_to_payload(open_payload, side, m4_regime, m4_tight, row_closed)
-    elif method == METHOD_5:
+    elif method in _M5_FAMILY or method == METHOD_6:
         open_payload["atr_multiplier_override"] = atr_mult_now
         open_payload["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
-        m5_apply_cycle_to_payload(open_payload, side, m5_info, m5_wide, m5_counter)
+        if method in _M5_FAMILY:
+            m5_apply_cycle_to_payload(open_payload, side, m5_info, m5_wide, m5_counter)
+    if method in _CVD_FAMILY:
+        apply_cvd_to_payload(open_payload, cvd.get("r4"), cvd.get("r1"), cvd.get("r_side"))
     # Chỉ phương pháp dùng %change (PP2) mới snapshot dải — PP1/PP3 không đụng pct_change
     if uses_pct_change_bands(method):
         bands_at_entry = build_pct_change_avg_bands_series(df_4h_raw, lookback_trades=lb_trades)

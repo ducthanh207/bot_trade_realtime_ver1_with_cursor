@@ -75,7 +75,7 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
     if df_1m is None or len(df_1m) < 60 * 24 * 7:
         return {"error": "Không đủ dữ liệu nến 1m từ Binance"}
     df_1d = None
-    if str(method) == "5":  # [2026-11-07] PP5 cần nến ngày dài (EMA + %change trên 1D)
+    if str(method) in ("5", "6.1"):  # [2026-11-07] PP5 (và PP6.1) cần nến ngày dài (EMA + %change trên 1D)
         from config import settings as _cfg
         try:
             binance_data.download_1d(symbol, start_dt - timedelta(days=int(_cfg.M5_DAILY_KLINES) + 30), end_dt,
@@ -89,7 +89,14 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
     from backtest.indicator_cache import IndicatorCache
 
     cache = IndicatorCache(symbol)
-    md = MarketData(symbol, df_1m, strict=True, df_1d=df_1d, ind_cache=cache)
+    df_taker = None
+    if str(method) in ("6", "6.1"):  # [2026-11-14] PP6 / PP6.1 cần nến 1H có taker buy (CVD)
+        try:
+            binance_data.download_1h_taker(symbol, start_dt - timedelta(days=WARMUP_DAYS), end_dt, log=lambda *a: None)
+        except Exception:
+            pass
+        df_taker = binance_data.load_1h_taker(symbol, end_dt)
+    md = MarketData(symbol, df_1m, strict=True, df_1d=df_1d, ind_cache=cache, df_taker=df_taker)
     slot = run_symbol(md, pd.Timestamp(start_dt), [str(method)], float(initial_capital),
                       float(leverage), float(wallet_pct), int(lookback_trades))[0]
     cache.save()

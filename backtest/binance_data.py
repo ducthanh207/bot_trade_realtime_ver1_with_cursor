@@ -298,3 +298,82 @@ def load_1d(symbol: str, end: datetime) -> pd.DataFrame:
     df.index = df.index.tz_convert(TZ_NAME)
     df.index.name = "timestamp"
     return df
+
+
+# ---------------------------------------------------------------------------
+# [2026-11-14] Nến 1H có taker buy volume cho CVD (PP6 / PP6.1). Cache 1m cũ chỉ có OHLCV nên tải riêng
+# nến 1H (1 request = 1500 giờ ≈ 62 ngày) và lưu backtest/data_cache/<SYMBOL>/1h_taker.csv.gz.
+# Cột: volume (base), taker_buy (taker buy base asset volume = cột thứ 10 của kline Binance).
+# ---------------------------------------------------------------------------
+TAKER_COLS = ["volume", "taker_buy"]
+HOUR_MS = 3_600_000
+
+
+def _cache_1h_taker(symbol: str) -> Path:
+    return CACHE_DIR / symbol.upper() / "1h_taker.csv.gz"
+
+
+def _parse_taker_rows(rows) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame(columns=TAKER_COLS, index=pd.DatetimeIndex([], tz="UTC", name="timestamp"))
+    df = pd.DataFrame([[r[0], r[5], r[9]] for r in rows], columns=["open_time"] + TAKER_COLS)
+    df.index = pd.to_datetime(pd.to_numeric(df["open_time"]), unit="ms", utc=True)
+    df.index.name = "timestamp"
+    df = df[TAKER_COLS].astype(float)
+    return df[~df.index.duplicated()].sort_index()
+
+
+def _fetch_1h_taker(symbol: str, start_ms: int, end_ms: int, log=print) -> list:
+    out, cur = [], start_ms
+    while cur < end_ms:
+        data = _get_json(
+            f"{FAPI_BASE}/fapi/v1/klines",
+            {"symbol": symbol, "interval": "1h", "startTime": cur, "endTime": end_ms - 1, "limit": KLINES_LIMIT},
+            log,
+        )
+        if not data:
+            break
+        out.extend(data)
+        cur = int(data[-1][0]) + HOUR_MS
+    return out
+
+
+def download_1h_taker(symbol: str, start: datetime, end: datetime, log=print) -> pd.DataFrame:
+    """Tải nến 1H (volume + taker buy) trong [start, end), chỉ phần cache còn thiếu ở đầu/cuối. Chỉ lưu nến đã đóng."""
+    symbol = symbol.upper()
+    path = _cache_1h_taker(symbol)
+    old = _read_cache(path) if path.exists() else None
+    s_ms = int(pd.Timestamp(start).timestamp() * 1000)
+    last_closed_open = pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(hours=1)
+    e_ms = min(int(pd.Timestamp(end).timestamp() * 1000), int(last_closed_open.timestamp() * 1000) + HOUR_MS)
+    rows = []
+    if old is None or old.empty:
+        rows = _fetch_1h_taker(symbol, s_ms, e_ms, log)
+    else:
+        first_ms = int(old.index[0].timestamp() * 1000)
+        last_ms = int(old.index[-1].timestamp() * 1000)
+        if s_ms < first_ms:
+            rows += _fetch_1h_taker(symbol, s_ms, first_ms, log)
+        if last_ms + HOUR_MS < e_ms:
+            rows += _fetch_1h_taker(symbol, last_ms + HOUR_MS, e_ms, log)
+    df = _parse_taker_rows(rows)
+    df = df[df.index <= last_closed_open]
+    if old is not None and not old.empty:
+        df = pd.concat([old[TAKER_COLS], df])
+        df = df[~df.index.duplicated(keep="last")].sort_index()
+    if not df.empty and rows:
+        _write_cache(df, path)
+    log(f"  {symbol}: {len(df)} nến 1H (taker buy) trong cache")
+    return df
+
+
+def load_1h_taker(symbol: str, end: datetime) -> pd.DataFrame:
+    """Nến 1H volume/taker_buy từ cache (index giờ mở, tz Asia/Bangkok). Chỉ đọc cache."""
+    path = _cache_1h_taker(symbol)
+    df = _read_cache(path) if path.exists() else None
+    if df is None or df.empty:
+        return pd.DataFrame(columns=TAKER_COLS)
+    df = df[df.index < pd.Timestamp(end)]
+    df.index = df.index.tz_convert(TZ_NAME)
+    df.index.name = "timestamp"
+    return df[TAKER_COLS]
