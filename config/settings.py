@@ -150,3 +150,25 @@ M5_WIDE_SIZE_MULT = float(os.environ.get("M5_WIDE_SIZE_MULT", "0.6"))           
 M5_WIDE_PCT_TP = _env_bool("M5_WIDE_PCT_TP", "true")                             # chốt lời ở dải %change 4H (như PP2)
 # Exit B đã sửa (dùng RSI nến 4H đã đóng): wide = chỉ lệnh đi ngang | all = mọi lệnh PP5 | off = như PP4 (không chạy)
 M5_EXIT_B = os.environ.get("M5_EXIT_B", "wide").strip().lower()
+# [2026-11-08] Lệnh ngược chu kỳ: thay vì chặn hẳn thì cho vào với size × hệ số này. 0 = chặn (như cũ).
+# LONG khi chu kỳ GIẢM / đi ngang thiên SHORT; SHORT khi chu kỳ TĂNG / đi ngang thiên LONG.
+# Ví dụ M5_COUNTER_LONG_SIZE=1.0 → chỉ còn chặn SHORT khi chu kỳ tăng; 0.5 → LONG đánh hồi với nửa size.
+M5_COUNTER_LONG_SIZE = float(os.environ.get("M5_COUNTER_LONG_SIZE", "0"))
+M5_COUNTER_SHORT_SIZE = float(os.environ.get("M5_COUNTER_SHORT_SIZE", "0"))
+
+# ---------- [2026-11-14] PP6 = PP4 + CVD, PP6.1 = PP5 + CVD (xem docs/PP6_CVD.md, strategy/cvd.py) ----------
+# CVD xấp xỉ từ nến Binance: delta = 2 × taker buy base volume − volume. "Độ dốc CVD" trên N nến đã đóng
+# = tổng delta N nến / tổng volume N nến (từ −1 đến +1, > 0 là bên mua chủ động áp đảo).
+M6_4H_BARS = int(os.environ.get("M6_4H_BARS", "6"))                     # số nến 4H đã đóng để xét độ dốc (6 = 24h)
+M6_4H_MIN_RATIO = float(os.environ.get("M6_4H_MIN_RATIO", "0"))         # LONG cần độ dốc > +ngưỡng, SHORT < −ngưỡng
+M6_1H_BARS = int(os.environ.get("M6_1H_BARS", "8"))                     # số nến 1H đã đóng (timing + thoát sớm)
+M6_1H_ENTRY_CONFIRM = _env_bool("M6_1H_ENTRY_CONFIRM")                  # vào lệnh cần thêm độ dốc 1H cùng chiều (mặc định tắt)
+# Thoát theo CVD 1H khi dòng tiền đi ngược lệnh: tighten = siết trailing | close = đóng lệnh ngay | off = tắt
+M6_EXIT_MODE = os.environ.get("M6_EXIT_MODE", "tighten").strip().lower()
+M6_EXIT_AGAINST_RATIO = float(os.environ.get("M6_EXIT_AGAINST_RATIO", "0"))  # LONG: độ dốc 1H < −ngưỡng là "ngược"
+M6_EXIT_CONFIRM_BARS = int(os.environ.get("M6_EXIT_CONFIRM_BARS", "2"))      # số nến 1H liên tiếp ngược mới tính
+M6_EXIT_MIN_HOURS = float(os.environ.get("M6_EXIT_MIN_HOURS", "2"))          # chỉ xét sau N giờ kể từ lúc vào
+M6_TIGHT_ATR_MULT = float(os.environ.get("M6_TIGHT_ATR_MULT", "1.5"))        # hệ số trailing ATR 1H sau khi siết
+# PP6.1: chu kỳ ngày đi ngang thì chọn phía theo: cvd = độ dốc CVD 4H dài (mặc định) | close = như PP5 | both = cả hai phải cùng phía
+M61_SIDEWAYS_BIAS = os.environ.get("M61_SIDEWAYS_BIAS", "cvd").strip().lower()
+M61_SIDE_CVD_BARS = int(os.environ.get("M61_SIDE_CVD_BARS", "12"))           # số nến 4H cho phía đi ngang (12 = 2 ngày)

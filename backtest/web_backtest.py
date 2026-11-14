@@ -32,6 +32,7 @@ import pandas as pd
 
 WARMUP_DAYS = 40  # live đọc 200 nến 4H (~34 ngày) → cần ít nhất chừng đó dữ liệu trước ngày bắt đầu
 MAX_DAYS = 400
+OVERRIDABLE = ("M5_COUNTER_LONG_SIZE", "M5_COUNTER_SHORT_SIZE")
 
 
 def _jsonable(v):
@@ -45,10 +46,19 @@ def _jsonable(v):
 
 
 def run_web_backtest(method: str, symbol: str, start: str, end: str | None, initial_capital: float,
-                     leverage: float, wallet_pct: float, lookback_trades: int = 15) -> dict:
+                     leverage: float, wallet_pct: float, lookback_trades: int = 15, overrides: dict | None = None) -> dict:
     """Chạy trong process con. start/end: 'YYYY-MM-DD' theo giờ VN; end tính hết ngày đó (tối đa tới phút đã đóng gần nhất)."""
     from backtest import binance_data
     from backtest.live_replay import MarketData, run_symbol
+
+    from config import settings as _st
+
+    # [2026-11-08] chỉ cho đổi vài tham số PP5 an toàn (process con, không ghi .env)
+    applied = {}
+    for k, v in (overrides or {}).items():
+        if k in OVERRIDABLE:
+            setattr(_st, k, float(v))
+            applied[k] = float(v)
 
     tz7 = timezone(timedelta(hours=7))
     start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=tz7)
@@ -65,7 +75,7 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
     if df_1m is None or len(df_1m) < 60 * 24 * 7:
         return {"error": "Không đủ dữ liệu nến 1m từ Binance"}
     df_1d = None
-    if str(method) == "5":  # [2026-11-07] PP5 cần nến ngày dài (EMA + %change trên 1D)
+    if str(method) in ("5", "6.1"):  # [2026-11-07] PP5 (và PP6.1) cần nến ngày dài (EMA + %change trên 1D)
         from config import settings as _cfg
         try:
             binance_data.download_1d(symbol, start_dt - timedelta(days=int(_cfg.M5_DAILY_KLINES) + 30), end_dt,
@@ -75,9 +85,21 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
         df_1d = binance_data.load_1d(symbol, end_dt)
         if df_1d.empty:
             df_1d = binance_data.resample_ohlcv(df_1m, "24h")
-    md = MarketData(symbol, df_1m, strict=True, df_1d=df_1d)
+    # [2026-11-08] bộ nhớ chỉ báo trên đĩa: chạy lại khoảng đã chạy (hoặc 1 tháng trong đó) chỉ việc đọc
+    from backtest.indicator_cache import IndicatorCache
+
+    cache = IndicatorCache(symbol)
+    df_taker = None
+    if str(method) in ("6", "6.1"):  # [2026-11-14] PP6 / PP6.1 cần nến 1H có taker buy (CVD)
+        try:
+            binance_data.download_1h_taker(symbol, start_dt - timedelta(days=WARMUP_DAYS), end_dt, log=lambda *a: None)
+        except Exception:
+            pass
+        df_taker = binance_data.load_1h_taker(symbol, end_dt)
+    md = MarketData(symbol, df_1m, strict=True, df_1d=df_1d, ind_cache=cache, df_taker=df_taker)
     slot = run_symbol(md, pd.Timestamp(start_dt), [str(method)], float(initial_capital),
                       float(leverage), float(wallet_pct), int(lookback_trades))[0]
+    cache.save()
 
     trades = [{k: _jsonable(v) for k, v in t.items()} for t in slot.trades]
     wins = sum(1 for t in slot.trades if t["profit"] > 0)
@@ -105,6 +127,7 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
         "final_balance": round(float(slot.balance), 4),
         "max_drawdown_pct": round(max_dd, 2),
         "exit_reasons": reasons,
+        "overrides": applied,
         "trades": trades,
     }
 

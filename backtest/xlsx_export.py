@@ -109,7 +109,7 @@ TRADE_COLUMNS = [
     ("Phí vào", "fee_in"), ("Profit (đã trừ phí ra)", "profit"), ("Profit ròng", None),
     ("% vốn", None), ("Vốn trước", "capital_before"), ("Vốn sau", "capital_after"),
     ("Lý do thoát", "exit_reason"), ("RSI vào", "entry_rsi"), ("RSI ra", "exit_rsi"),
-    ("Chu kỳ ngày (PP5)", "cycle"), ("Thoát nới (PP5)", "cycle_wide"),
+    ("Chu kỳ ngày (PP5)", "cycle"), ("Thoát nới (PP5)", "cycle_wide"), ("Ngược chu kỳ (PP5)", "cycle_counter"),
 ]
 
 
@@ -155,6 +155,8 @@ def backtest_stats(result: dict) -> list:
         ("Chuỗi thua dài nhất", streak),
         ("Drawdown lớn nhất (%)", result.get("max_drawdown_pct")),
     ]
+    for k, v in sorted((result.get("overrides") or {}).items()):
+        rows.append((f"Tham số: {k}", v))
     for k, v in sorted((result.get("exit_reasons") or {}).items()):
         rows.append((f"Thoát: {k}", v))
     return rows
@@ -180,5 +182,5 @@ def backtest_result_xlsx(result: dict) -> bytes:
             else:
                 row.append(t.get(key))
         rows.append(row)
-    widths = [6, 7, 20, 12, 20, 12, 12, 10, 9, 14, 12, 9, 12, 12, 18, 9, 9, 16, 12]
+    widths = [6, 7, 20, 12, 20, 12, 12, 10, 9, 14, 12, 9, 12, 12, 18, 9, 9, 16, 12, 12]
     return build_xlsx([("Thống kê", stats, [26, 26]), ("Lệnh", rows, widths)])

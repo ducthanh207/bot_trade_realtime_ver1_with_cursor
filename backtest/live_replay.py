@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Backtest "phát lại live": chạy lại đúng vòng lặp bot/paper_loop.py trên dữ liệu lịch sử,
-cho mọi phương pháp (PP1–PP4, và PP5 khi chọn --methods 5) và nhiều cặp coin cùng lúc.
+cho mọi phương pháp (PP1–PP4, và PP5 / PP6 / PP6.1 khi chọn --methods 5 6 6.1) và nhiều cặp coin cùng lúc.
 
 Dùng lại trực tiếp code chiến lược của bot (strategy/*, bot/paper_fees.py, config/settings.py),
 chỉ thay đồng hồ thật bằng đồng hồ mô phỏng:
@@ -47,21 +47,25 @@ from strategy.risk import (
     m3_streak_multiplier,
 )
 from strategy.exit_engine import compute_exit_candidates, pick_best_exit
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61
 from strategy.regime import (
     classify_regime,
     m4_regime_entry_decision,
     m4_apply_regime_to_payload,
     m4_invalidation_hit,
 )
-from strategy.daily_cycle import daily_cycle_info, m5_entry_decision, m5_apply_cycle_to_payload
+from strategy.daily_cycle import daily_cycle_info, m5_entry_plan, m5_apply_cycle_to_payload
+from strategy import cvd as cvd_mod
 
 H1 = pd.Timedelta(hours=1)
 H4 = pd.Timedelta(hours=4)
 ALL_METHODS = (METHOD_1, METHOD_2, METHOD_3, METHOD_4)  # mặc định khi không truyền --methods
-METHOD_CHOICES = ALL_METHODS + (METHOD_5,)  # [2026-11-07] PP5 chỉ chạy khi chọn --methods 5
-_M3_FAMILY = (METHOD_3, METHOD_4, METHOD_5)
-_M4_FAMILY = (METHOD_4, METHOD_5)
+# [2026-11-07] PP5 chỉ chạy khi chọn --methods 5; [2026-11-14] PP6 / PP6.1 (CVD) khi chọn 6 / 6.1
+METHOD_CHOICES = ALL_METHODS + (METHOD_5, METHOD_6, METHOD_61)
+_M3_FAMILY = (METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61)
+_M4_FAMILY = (METHOD_4, METHOD_5, METHOD_6, METHOD_61)
+_M5_FAMILY = (METHOD_5, METHOD_61)  # cần nến ngày
+_CVD_FAMILY = (METHOD_6, METHOD_61)  # cần nến 1H có taker buy
 D1 = pd.Timedelta(days=1)
 
 
@@ -97,8 +101,14 @@ class MarketData:
 
     WINDOW = 200  # số nến live lấy về: get_klines_4h(limit=200), get_klines_1h(limit=200)
 
-    def __init__(self, symbol: str, df_1m: pd.DataFrame, strict: bool = True, df_1d: pd.DataFrame = None):
+    def __init__(self, symbol: str, df_1m: pd.DataFrame, strict: bool = True, df_1d: pd.DataFrame = None,
+                 ind_cache=None, df_taker: pd.DataFrame = None):
         self.symbol = symbol
+        # [2026-11-14] CVD cho PP6/PP6.1: độ dốc tính trước trên nến 1H/4H đã đóng (rolling nhân quả, index = giờ mở).
+        # Tại t chỉ đọc nến mở lúc <= t−1h (1H) / t−4h (4H) → không nhìn trước.
+        self._set_cvd(df_taker)
+        # [2026-11-08] bộ nhớ chỉ báo trên đĩa (backtest/indicator_cache.py); None = không dùng
+        self.ind_cache = ind_cache
         # [2026-11-07] nến 1D cho PP5 (index giờ mở, tz VN). Tại t chỉ dùng nến đã đóng: giờ mở + 1 ngày <= t.
         self.df_1d = df_1d if df_1d is not None else pd.DataFrame()
         self._daily_cache = {}
@@ -155,10 +165,64 @@ class MarketData:
         h = self.idx[i].floor("h") - H1
         v = self._atr_cache.get(h)
         if v is None:
-            ind = add_indicators(self._past(self.df1h_raw, h))
+            ind = self._ind1_tail(h)
             v = float(ind["ATR"].iloc[-1]) if len(ind) and ind.index[-1] == h else float("nan")
             self._atr_cache[h] = v
         return v
+
+    def _ind1_tail(self, h) -> pd.DataFrame:
+        """2 dòng cuối add_indicators trên cửa sổ 1H có nến đóng cuối mở lúc h (đọc bộ nhớ nếu có)."""
+        c = self.ind_cache
+        if c is not None:
+            v = c.get1(h)
+            if v is not None:
+                return v
+        raw1 = self._past(self.df1h_raw, h)
+        ind1 = add_indicators(raw1).tail(2)
+        if c is not None and len(raw1) == self.WINDOW - 1:  # chỉ lưu cửa sổ đủ nến như live
+            c.put1(h, ind1)
+        return ind1
+
+    def _ind4_rows(self, t_closed):
+        """(row_closed, prev_row_closed, row_m3) trên cửa sổ 4H có nến đóng cuối mở lúc t_closed."""
+        c = self.ind_cache
+        if c is not None:
+            v = c.get4(t_closed)
+            if v is not None:
+                return v
+        raw4 = self._past(self.df4_raw, t_closed)
+        ind4 = add_indicators(raw4)
+        if len(ind4) < 2:
+            return None
+        m3 = self._m3(raw4)
+        row_m3 = m3.iloc[-1] if len(m3) and m3.index[-1] == t_closed else None
+        v = (ind4.iloc[-1], ind4.iloc[-2], row_m3)
+        if c is not None and len(raw4) == self.WINDOW - 1:
+            c.put4(t_closed, v)
+        return v
+
+    def _set_cvd(self, df_taker):
+        empty = pd.Series(dtype=float)
+        self.cvd_r1 = self.cvd_r4 = self.cvd_rside = empty
+        if df_taker is None or not cvd_mod.has_taker(df_taker):
+            return
+        self.cvd_r1 = cvd_mod.ratio_series(df_taker, settings.M6_1H_BARS)
+        d4 = cvd_mod.resample_4h(df_taker)
+        self.cvd_r4 = cvd_mod.ratio_series(d4, settings.M6_4H_BARS)
+        self.cvd_rside = cvd_mod.ratio_series(d4, settings.M61_SIDE_CVD_BARS)
+
+    @staticmethod
+    def _val(series, key):
+        v = series.get(key) if len(series) else None
+        return None if v is None or pd.isna(v) else float(v)
+
+    def cvd_at(self, t) -> dict:
+        """Độ dốc CVD tại tick đầu nến 4H mở lúc t (nến 4H đóng gần nhất mở lúc t−4h, nến 1H mở lúc t−1h)."""
+        return {"r4": self._val(self.cvd_r4, t - H4), "r1": self._val(self.cvd_r1, t - H1),
+                "r_side": self._val(self.cvd_rside, t - H4)}
+
+    def cvd_r1_at(self, h_open):
+        return self._val(self.cvd_r1, h_open)
 
     def daily_at(self, t) -> dict:
         """Chu kỳ nến ngày PP5 tại thời điểm t (cửa sổ M5_DAILY_KLINES nến đã đóng như bot live)."""
@@ -180,14 +244,14 @@ class MarketData:
         t_closed, t_prev = t - H4, t - 2 * H4
         if self.strict:
             raw4 = self._past(self.df4_raw, t_closed)
-            ind4 = add_indicators(raw4)
-            if len(ind4) < 2 or ind4.index[-1] != t_closed or ind4.index[-2] != t_prev:
+            rows = self._ind4_rows(t_closed)
+            if rows is None or rows[0].name != t_closed or rows[1].name != t_prev:
                 return None
-            m3 = self._m3(raw4)
-            row_m3 = m3.iloc[-1] if len(m3) and m3.index[-1] == t_closed else None
-            regime = classify_regime(m3) if settings.M4_REGIME_ENABLED and row_m3 is not None else {}
-            raw1 = self._past(self.df1h_raw, t - H1)
-            ind1 = add_indicators(raw1)
+            row_closed, prev_row_closed, row_m3 = rows
+            regime = {}
+            if settings.M4_REGIME_ENABLED and row_m3 is not None:  # cần cả chuỗi M3 → tính, không lưu
+                regime = classify_regime(self._m3(raw4))
+            ind1 = self._ind1_tail(t - H1)
             if len(ind1) >= 2 and ind1.index[-1] == t - H1:
                 last = ind1.iloc[[-1]].copy()
                 last.index = pd.DatetimeIndex([t], name=ind1.index.name)
@@ -195,7 +259,7 @@ class MarketData:
             else:
                 df_1h = pd.DataFrame()
             return {
-                "row_closed": ind4.iloc[-1], "prev_row_closed": ind4.iloc[-2], "row_m3": row_m3,
+                "row_closed": row_closed, "prev_row_closed": prev_row_closed, "row_m3": row_m3,
                 "df_1h": df_1h, "df_4h_raw": self._with_forming(raw4, t, open_px),
                 "regime": regime,  # [2026-11-01]
             }
@@ -317,8 +381,15 @@ class SlotSim:
             # [2026-11-07] PP5: chu kỳ ngày lúc vào lệnh (trống với PP1–PP4)
             "cycle": ot.get("m5_cycle"),
             "cycle_wide": ot.get("m5_wide"),
+            "cycle_counter": ot.get("m5_counter"),
             "cycle_d_pct": ot.get("m5_d_pct"),
             "cycle_x_pct": ot.get("m5_x_pct"),
+            # [2026-11-14] PP6 / PP6.1: độ dốc CVD lúc vào + lúc nào bị siết do CVD 1H ngược lệnh
+            "cvd4_ratio": ot.get("cvd4_ratio"),
+            "cvd1_ratio": ot.get("cvd1_ratio"),
+            "cvd_side_ratio": ot.get("cvd_side_ratio"),
+            "cvd_tight": ot.get("cvd_tight"),
+            "cvd_tight_at": ot.get("cvd_tight_at"),
         })
         self.balance = capital_after
         self.open_trade = None
@@ -369,12 +440,20 @@ class SlotSim:
                 return
 
         # [2026-11-07] PP5 lọc chu kỳ nến ngày — giống bot/slot_engine.step_slot
-        m5_info, m5_wide = {}, False
-        if method == METHOD_5:
+        m5_info, m5_wide, m5_size, m5_counter = {}, False, 1.0, False
+        cvd = md.cvd_at(t) if method in _CVD_FAMILY else {}
+        if method in _M5_FAMILY:
             m5_info = md.daily_at(t)
-            allow_cycle, m5_wide = m5_entry_decision(side, m5_info.get("cycle"))
+            if method == METHOD_61:  # [2026-11-14] PP6.1: đi ngang chọn phía theo CVD
+                allow_cycle, m5_wide, m5_size, m5_counter = cvd_mod.m61_entry_plan(side, m5_info.get("cycle"), cvd.get("r_side"))
+            else:
+                allow_cycle, m5_wide, m5_size, m5_counter = m5_entry_plan(side, m5_info.get("cycle"))
             if not allow_cycle:
                 return
+
+        # [2026-11-14] PP6 / PP6.1: CVD 4H (và tuỳ chọn 1H) cùng chiều lệnh — giống bot/slot_engine.step_slot
+        if method in _CVD_FAMILY and not cvd_mod.cvd_entry_ok(side, cvd.get("r4"), cvd.get("r1")):
+            return
 
         size_mult = 1.0
         if method in _M3_FAMILY and row_m3 is not None:
@@ -399,8 +478,10 @@ class SlotSim:
             elif side == "SHORT" and higher_low and not lower_high:
                 size_mult = min(size_mult, disagree_size)
             size_mult *= m3_streak_multiplier(self.losses)
-        if method == METHOD_5 and m5_wide:
+        if method in _M5_FAMILY and m5_wide:
             size_mult *= float(settings.M5_WIDE_SIZE_MULT)
+        if method in _M5_FAMILY and m5_counter:  # [2026-11-08] lệnh ngược chu kỳ (mặc định không có)
+            size_mult *= float(m5_size)
 
         size, margin, notional = size_and_margin(self.balance, entry_px, leverage=self.leverage, wallet_pct=self.wallet_pct)
         if method in _M3_FAMILY and size_mult < 1.0:
@@ -444,9 +525,12 @@ class SlotSim:
             ot["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
             if settings.M4_REGIME_ENABLED or settings.M4_INVALIDATION_EXIT:  # [2026-11-01]
                 m4_apply_regime_to_payload(ot, side, m4_regime, m4_tight, row_closed)
-        if method == METHOD_5:
+        if method in _M5_FAMILY or method == METHOD_6:
             ot["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
-            m5_apply_cycle_to_payload(ot, side, m5_info, m5_wide)
+        if method in _M5_FAMILY:
+            m5_apply_cycle_to_payload(ot, side, m5_info, m5_wide, m5_counter)
+        if method in _CVD_FAMILY:
+            cvd_mod.apply_cvd_to_payload(ot, cvd.get("r4"), cvd.get("r1"), cvd.get("r_side"))
         self.open_trade = ot
         self.balance -= fee_in
         self._prepare_risk()
@@ -487,6 +571,18 @@ def run_symbol(md: MarketData, start, methods, capital, leverage, wallet_pct, lo
                     px = px_lim if px_lim is not None else px
                     fee_out = linear_taker_fee_usdt(size, px, float(settings.TAKER_FEE))
                     cands.append((t, pnl_lim - fee_out, px, "M4_INVALIDATION"))
+
+            # [2026-11-14] PP6 / PP6.1: nến 1H vừa đóng (mở lúc t−1h) → cập nhật CVD 1H; live xét mỗi vòng lặp
+            if s.method in _CVD_FAMILY and t.minute == 0:
+                h1_t = t - H1
+                if cvd_mod.cvd_exit_step(ot, h1_t, md.cvd_r1_at(h1_t)):
+                    entry, size, side = float(ot["entry_price"]), float(ot["size"]), ot["side"]
+                    px = float(o[i])
+                    pnl_raw = (px - entry) * size if side == "LONG" else (entry - px) * size
+                    pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss_from_capital(ot))
+                    px = px_lim if px_lim is not None else px
+                    fee_out = linear_taker_fee_usdt(size, px, float(settings.TAKER_FEE))
+                    cands.append((t, pnl_lim - fee_out, px, "CVD_EXIT"))
 
             if ctx is not None:
                 entry_4h_ts = ot.get("entry_4h_ts")
@@ -609,14 +705,28 @@ def _backtest_one(job):
     if df_1m.empty:
         return sym, None
     df_1d = None
-    if METHOD_5 in a["methods"]:
+    df_taker = None
+    if any(m in a["methods"] for m in _CVD_FAMILY):  # [2026-11-14] CVD: nến 1H có taker buy
+        from backtest.binance_data import load_1h_taker
+
+        df_taker = load_1h_taker(sym, end)
+        if df_taker.empty:
+            print(f"  {sym}: CHƯA có nến 1H taker buy → PP6/PP6.1 sẽ không vào lệnh nào")
+    if any(m in a["methods"] for m in _M5_FAMILY):
         from backtest.binance_data import load_1d, resample_ohlcv
 
         df_1d = load_1d(sym, end)
         if df_1d.empty:  # không tải được 1D → gộp từ 1m (lịch sử ngắn: %change ngày có thể chưa có)
             df_1d = resample_ohlcv(df_1m, "24h")
-    md = MarketData(sym, df_1m, strict=not a["fast"], df_1d=df_1d)
+    cache = None
+    if not a["fast"] and not a.get("no_cache"):
+        from backtest.indicator_cache import IndicatorCache
+
+        cache = IndicatorCache(sym)
+    md = MarketData(sym, df_1m, strict=not a["fast"], df_1d=df_1d, ind_cache=cache, df_taker=df_taker)
     slots = run_symbol(md, start, a["methods"], a["capital"], a["leverage"], a["wallet_pct"], a["lookback_trades"])
+    if cache is not None:
+        cache.save()
     res = {"summaries": [], "months": [], "trades": []}
     for s in slots:
         res["summaries"].append(summarize(sym, s, a["capital"], start, end))
@@ -626,7 +736,7 @@ def _backtest_one(job):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Backtest phát lại vòng lặp live (PP1–PP5) trên nhiều cặp coin.")
+    p = argparse.ArgumentParser(description="Backtest phát lại vòng lặp live (PP1–PP6.1) trên nhiều cặp coin.")
     p.add_argument("--symbols", nargs="+", default=None, help="Ví dụ: BTCUSDT ETHUSDT SOLUSDT (mặc định: SYMBOL trong .env)")
     p.add_argument("--universe", choices=["volume", "marketcap", "both"], default=None,
                    help="Tự chọn cặp: volume = biến động volume lớn nhất trong khoảng backtest; marketcap = vốn hoá lớn nhất; both = cả 2 nhóm")
@@ -637,7 +747,7 @@ def main(argv=None):
     p.add_argument("--start", default=None, help="YYYY-MM-DD (mặc định: 365 ngày trước)")
     p.add_argument("--end", default=None, help="YYYY-MM-DD, không gồm ngày này (mặc định: hôm nay)")
     p.add_argument("--methods", nargs="+", default=list(ALL_METHODS), choices=list(METHOD_CHOICES),
-                   help="Mặc định 1 2 3 4. PP5 (PP4 + chu kỳ nến ngày) chạy khi thêm 5, vd --methods 4 5")
+                   help="Mặc định 1 2 3 4. Thêm 5 (PP4 + chu kỳ ngày), 6 (PP4 + CVD), 6.1 (PP5 + CVD), vd --methods 4 6 5 6.1")
     p.add_argument("--capital", type=float, default=settings.CAPITAL_START)
     p.add_argument("--leverage", type=float, default=settings.LEVERAGE)
     p.add_argument("--wallet-pct", type=float, default=settings.WALLET_PCT)
@@ -650,6 +760,8 @@ def main(argv=None):
     p.add_argument("--download-workers", type=int, default=3, help="Số luồng tải dữ liệu (dùng chung giới hạn weight)")
     p.add_argument("--max-weight", type=int, default=1200, help="Weight API tối đa mỗi phút (Binance cho 2400/IP)")
     p.add_argument("--fast", action="store_true", help="Tính chỉ báo 1 lần trên toàn chuỗi (nhanh ~4 lần, kết quả như strict)")
+    p.add_argument("--no-cache", action="store_true",
+                   help="Không dùng bộ nhớ chỉ báo trên đĩa (backtest/data_cache/<SYM>/ind_*.pkl) ở chế độ strict")
     p.add_argument("--out", default=None, help="Thư mục kết quả (mặc định backtest/results/<thời điểm chạy>)")
     a = p.parse_args(argv)
 
@@ -698,7 +810,14 @@ def main(argv=None):
                 print(f"  {futs[f]}: lỗi tải dữ liệu ({e}), bỏ qua cặp này")
 
     # 1b) [2026-11-07] PP5 cần nến ngày dài hơn nhiều (EMA + %change trên 1D): tải 1D riêng (1 request/cặp)
-    if METHOD_5 in a.methods:
+    if any(m in a.methods for m in _CVD_FAMILY):  # [2026-11-14] PP6/PP6.1: nến 1H có taker buy (CVD)
+        print("Tải nến 1H (taker buy) cho CVD...")
+        for sym in symbols:
+            try:
+                binance_data.download_1h_taker(sym, start - timedelta(days=a.warmup_days), end, print)
+            except Exception as e:
+                print(f"  {sym}: lỗi tải nến 1H taker ({e}) → PP6/PP6.1 không vào lệnh trên cặp này")
+    if any(m in a.methods for m in _M5_FAMILY):
         d_start = start - timedelta(days=int(settings.M5_DAILY_KLINES) + 30)
         print(f"Tải nến 1D cho PP5 từ {d_start.date()}...")
         for sym in symbols:
@@ -711,7 +830,7 @@ def main(argv=None):
     workers = a.workers or max(1, (os.cpu_count() or 2) - 1)
     mode = "nhanh (--fast)" if a.fast else "strict: chỉ dùng nến đã đóng tại từng thời điểm"
     print(f"Backtest {', '.join('PP' + m for m in a.methods)} | {workers} process | chế độ {mode}")
-    args = {k: getattr(a, k) for k in ("set", "warmup_days", "fast", "methods", "capital", "leverage", "wallet_pct", "lookback_trades")}
+    args = {k: getattr(a, k) for k in ("set", "warmup_days", "fast", "methods", "capital", "leverage", "wallet_pct", "lookback_trades", "no_cache")}
     jobs = [{"symbol": s, "start": start, "end": end, "args": args} for s in symbols]
     summaries, all_trades, months = [], [], []
     with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as ex:
