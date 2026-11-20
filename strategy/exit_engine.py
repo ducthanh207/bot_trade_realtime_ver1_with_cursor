@@ -17,7 +17,7 @@ from config import settings
 from bot.paper_fees import linear_taker_fee_usdt
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 from strategy.signals import long_exit, long_exit_early, short_exit, short_exit_early
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5, METHOD_7
 from strategy.risk import (
     check_atr_trailing,
     limit_pnl_and_exit_price,
@@ -109,14 +109,15 @@ def compute_exit_candidates(
     last_check = open_trade.get("last_sl_check")
     if last_check is not None and not df_1m.empty:
         df_slice = df_1m.loc[df_1m.index >= last_check]
-        refresh_atr_from_1h(open_trade, df_1h)
+        if method != METHOD_7:  # [2026-11-20] PP7 giữ ATR 4H lúc vào lệnh
+            refresh_atr_from_1h(open_trade, df_1h)
         margin = open_trade["margin"]
         notional = open_trade["notional"]
         maint = settings.MAINT_MARGIN_RATE * notional
 
         # Method 4: hard stop — thoát ngay khi giá chạm mức lỗ max_loss (không chỉ giới hạn PnL trên giấy)
         hard_stop_px = None
-        if method in (METHOD_4, METHOD_5) and size > 0:
+        if method in (METHOD_4, METHOD_5, METHOD_7) and size > 0:
             hard_stop_px = entry - max_loss / size if side == "LONG" else entry + max_loss / size
 
         liq_px = entry + (maint - margin) / size if side == "LONG" else entry - (maint - margin) / size
@@ -172,7 +173,7 @@ def compute_exit_candidates(
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EXIT"))
 
     # Method 4: tầng early thường được thay bằng Exit B (RSI vượt ngưỡng + slope N nến) bên dưới
-    if apply_4h_layer and allow_early_exit and sig_early and method not in (METHOD_4, METHOD_5):
+    if apply_4h_layer and allow_early_exit and sig_early and method not in (METHOD_4, METHOD_5, METHOD_7):
         pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
         take = True
         if method == METHOD_2:
@@ -184,10 +185,10 @@ def compute_exit_candidates(
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT"))
 
     # ---------- Phương pháp 3/4: Exit B (tang manh — nguong + slope) ----------
-    if method in (METHOD_3, METHOD_4, METHOD_5) and df_4h_raw is not None and not df_4h_raw.empty:
+    if method in (METHOD_3, METHOD_4, METHOD_5, METHOD_7) and df_4h_raw is not None and not df_4h_raw.empty:
         from strategy.signals import long_early_exit_strong_b, short_early_exit_strong_b
         from config import settings as _s3
-        if method in (METHOD_4, METHOD_5):
+        if method in (METHOD_4, METHOD_5, METHOD_7):
             confirm_bars = getattr(_s3, "M4_EARLY_EXIT_B_CONFIRM_BARS", 2)
         else:
             confirm_bars = getattr(_s3, "M3_EARLY_EXIT_B_CONFIRM_BARS", 2)
@@ -200,6 +201,11 @@ def compute_exit_candidates(
                 from strategy.indicators import add_indicators as _add_ind
                 df_b = _add_ind(df_4h_raw.iloc[:-1])
                 i_last = len(df_b) - 1
+        elif method == METHOD_7 and getattr(_s3, "M7_EXIT_B", "off") == "fixed":
+            # [2026-11-20] PP7: tùy chọn Exit B đã sửa (mặc định off = giống PP4)
+            from strategy.indicators import add_indicators as _add_ind
+            df_b = _add_ind(df_4h_raw.iloc[:-1])
+            i_last = len(df_b) - 1
         if apply_4h_layer and allow_early_exit:
             if side == "LONG":
                 strong_b = long_early_exit_strong_b(df_b, i_last, confirm_bars)
