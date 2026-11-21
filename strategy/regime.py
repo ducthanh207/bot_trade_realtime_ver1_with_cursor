@@ -114,7 +114,8 @@ def _hours_since_entry(open_trade: dict, now) -> float | None:
 
 
 def _early_cut_applies(open_trade: dict) -> bool:
-    if str(open_trade.get("trading_method", "")) != "4":
+    from strategy.disks import get_disk  # [2026-11-21] đĩa có khối regime_cut (PP4)
+    if not get_disk(open_trade.get("trading_method", "")).regime:
         return False
     if settings.M4_EARLY_CUT_ONLY_TIGHT and not open_trade.get("m4_tight"):
         return False

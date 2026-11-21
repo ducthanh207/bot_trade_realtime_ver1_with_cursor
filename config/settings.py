@@ -182,3 +182,53 @@ M7_TREND_FILTER = _env_bool("M7_TREND_FILTER", "true")                    # LONG
 M7_TREND_SLOPE_BARS = int(os.environ.get("M7_TREND_SLOPE_BARS", "0"))     # >0: EMA50 phải dốc cùng hướng so với N nến 4H trước
 M7_MAX_STOP_CAPITAL_PCT = float(os.environ.get("M7_MAX_STOP_CAPITAL_PCT", "0.05"))  # hard stop an toàn (% vốn), xa hơn stop thường
 M7_EXIT_B = os.environ.get("M7_EXIT_B", "off").strip().lower()            # off = như PP4 (không chạy) | fixed = Exit B đã sửa (RSI 4H đã đóng)
+
+
+# ---------- [2026-11-21] Tham số riêng theo "đĩa chiến lược" (strategy/disks.py) ----------
+# Mỗi đĩa có thể ghi đè một số tham số ở trên (vd M7_RISK_PCT) CHỈ cho đĩa đó. Ghi đè gắn theo luồng chạy
+# (contextvars), nên paper/backtest của đĩa này không làm đổi giá trị mà bot live hay đĩa khác đang đọc.
+# Chỉ khi có đĩa thật sự dùng tham số riêng thì module này mới chuyển sang chế độ đọc qua lớp ghi đè;
+# đĩa có sẵn PP1–PP7 không ghi đè gì → đọc settings như cũ, không tốn thêm gì.
+import contextlib as _contextlib
+import contextvars as _contextvars
+import sys as _sys
+import types as _types
+
+_OVERRIDES = _contextvars.ContextVar("settings_overrides", default=None)
+
+
+class _SettingsModule(_types.ModuleType):
+    def __getattribute__(self, name):
+        ov = _OVERRIDES.get()
+        if ov is not None and name in ov:
+            return ov[name]
+        return _types.ModuleType.__getattribute__(self, name)
+
+
+def _enable_overrides():
+    mod = _sys.modules[__name__]
+    if not isinstance(mod, _SettingsModule):
+        mod.__class__ = _SettingsModule
+
+
+@_contextlib.contextmanager
+def overrides(values: dict):
+    """Trong khối with: settings.X trả values[X] (chỉ ở luồng hiện tại). values rỗng → không làm gì."""
+    if not values:
+        yield
+        return
+    _enable_overrides()
+    cur = _OVERRIDES.get()
+    merged = dict(cur or {})
+    merged.update(values)
+    token = _OVERRIDES.set(merged)
+    try:
+        yield
+    finally:
+        _OVERRIDES.reset(token)
+
+
+def override_signature() -> tuple:
+    """Khoá cho bộ nhớ đệm phụ thuộc tham số: () khi không có ghi đè."""
+    ov = _OVERRIDES.get()
+    return tuple(sorted(ov.items())) if ov else ()

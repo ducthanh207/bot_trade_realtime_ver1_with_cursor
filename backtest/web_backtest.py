@@ -32,7 +32,7 @@ import pandas as pd
 
 WARMUP_DAYS = 40  # live đọc 200 nến 4H (~34 ngày) → cần ít nhất chừng đó dữ liệu trước ngày bắt đầu
 MAX_DAYS = 400
-OVERRIDABLE = ("M5_COUNTER_LONG_SIZE", "M5_COUNTER_SHORT_SIZE")
+# [2026-11-21] tham số thử chỉ trong job: mọi tham số đĩa được phép ghi đè (strategy/disks.param_schema), kiểm tra kiểu/khoảng
 
 
 def _jsonable(v):
@@ -51,14 +51,17 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
     from backtest import binance_data
     from backtest.live_replay import MarketData, run_symbol
 
-    from config import settings as _st
+    from strategy import disks as _disks
 
-    # [2026-11-08] chỉ cho đổi vài tham số PP5 an toàn (process con, không ghi .env)
-    applied = {}
-    for k, v in (overrides or {}).items():
-        if k in OVERRIDABLE:
-            setattr(_st, k, float(v))
-            applied[k] = float(v)
+    t_start = time.time()
+    disk = _disks.find_disk(method)
+    if disk is None:
+        return {"error": f"Không có đĩa chiến lược '{method}'"}
+    # Tham số thử (chỉ trong process con này, không ghi .env / đĩa): đè lên tham số của đĩa
+    applied = _disks.check_params(overrides or {})
+    if applied:
+        _disks.use_variant(method, applied)
+        disk = _disks.get_disk(method)
 
     tz7 = timezone(timedelta(hours=7))
     start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=tz7)
@@ -75,7 +78,7 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
     if df_1m is None or len(df_1m) < 60 * 24 * 7:
         return {"error": "Không đủ dữ liệu nến 1m từ Binance"}
     df_1d = None
-    if str(method) in ("5", "6.1"):  # [2026-11-07] PP5 (và PP6.1) cần nến ngày dài (EMA + %change trên 1D)
+    if disk.daily:  # [2026-11-07] khối daily_cycle (PP5, PP6.1, ...) cần nến ngày dài (EMA + %change trên 1D)
         from config import settings as _cfg
         try:
             binance_data.download_1d(symbol, start_dt - timedelta(days=int(_cfg.M5_DAILY_KLINES) + 30), end_dt,
@@ -90,7 +93,7 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
 
     cache = IndicatorCache(symbol)
     df_taker = None
-    if str(method) in ("6", "6.1"):  # [2026-11-14] PP6 / PP6.1 cần nến 1H có taker buy (CVD)
+    if disk.cvd:  # [2026-11-14] khối cvd (PP6, PP6.1, ...) cần nến 1H có taker buy
         try:
             binance_data.download_1h_taker(symbol, start_dt - timedelta(days=WARMUP_DAYS), end_dt, log=lambda *a: None)
         except Exception:
@@ -115,6 +118,9 @@ def run_web_backtest(method: str, symbol: str, start: str, end: str | None, init
     return {
         "symbol": symbol,
         "method": str(method),
+        "label": disk.label,  # [2026-11-21] PP4 / PP6.1 / mã đĩa nạp
+        "disk_name": disk.name,
+        "elapsed_sec": round(time.time() - t_start, 1),
         "start": start_dt.isoformat(),
         "end": end_dt.isoformat(),
         "data_last_candle": df_1m.index[-1].isoformat(),
@@ -157,6 +163,11 @@ def _run_job(job_id: str, kwargs: dict):
             lines = [ln for ln in proc.stdout.splitlines() if ln.startswith(RESULT_PREFIX)]
             if lines:
                 job["result"] = json.loads(lines[-1][len(RESULT_PREFIX):])
+                try:  # [2026-11-21] lưu lại để xem / tải Excel sau, kể cả khi bot khởi động lại
+                    from backtest import results_store
+                    results_store.save(job_id, job.get("params") or kwargs, job["result"])
+                except Exception:
+                    pass
             else:
                 job["result"] = {"error": "Backtest lỗi", "detail": (proc.stderr or proc.stdout)[-3000:]}
         except subprocess.TimeoutExpired:
@@ -179,6 +190,10 @@ def submit(**kwargs) -> str:
 def status(job_id: str) -> dict:
     j = _jobs.get(job_id)
     if j is None:
+        from backtest import results_store
+        saved = results_store.load(job_id)  # [2026-11-21] kết quả đã lưu
+        if saved is not None:
+            return {**saved, "state": "done", "saved": True}
         return {"state": "unknown", "error": "Không tìm thấy job (có thể bot đã khởi động lại)"}
     if "result" not in j:
         waiting = "started" not in j
@@ -197,7 +212,9 @@ if __name__ == "__main__":
     try:
         from backtest import binance_data as _bd
         _bd.LIMITER.max_weight = 600  # 3 job song song x 600 < 2400 weight/phút Binance, chừa phần cho bot
-        res = run_web_backtest(**json.loads(sys.argv[1]))
+        kw = json.loads(sys.argv[1])
+        kw.pop("batch", None)
+        res = run_web_backtest(**kw)
     except Exception as e:
         res = {"error": str(e), "detail": traceback.format_exc()[-3000:]}
     print(RESULT_PREFIX + json.dumps(res, ensure_ascii=False, default=str))

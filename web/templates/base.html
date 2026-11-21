@@ -9,20 +9,30 @@
 </head>
 <body>
   <div class="layout-root">
-    <nav class="top-nav" role="navigation" aria-label="Menu chính">
+    {# [2026-11-21] Menu gọn: Paper 1–5, Chiến lược (kho đĩa), Backtest, Biểu đồ, Trade thật.
+       Điện thoại: một hàng vuốt ngang, mục đang mở tự cuộn vào giữa. #}
+    <nav class="top-nav" role="navigation" aria-label="Menu chính" id="topNav">
       <span class="nav-paper-group" aria-label="Paper trade">
-        <a href="{{ url_for('page_paper') }}" class="nav-link {% if nav_active == 'paper' %}active{% endif %}">Paper trade</a>
-        <a href="{{ url_for('page_paper2') }}" class="nav-link {% if nav_active == 'paper2' %}active{% endif %}">Paper trade 2</a>
-        <a href="{{ url_for('page_paper3') }}" class="nav-link {% if nav_active == 'paper3' %}active{% endif %}">Paper trade 3</a>
-        <a href="{{ url_for('page_paper4') }}" class="nav-link {% if nav_active == 'paper4' %}active{% endif %}">Paper trade 4</a>
-        <a href="{{ url_for('page_paper5') }}" class="nav-link {% if nav_active == 'paper5' %}active{% endif %}">Paper trade 5</a>
-        <a href="{{ url_for('page_backtest7') }}" class="nav-link {% if nav_active == 'backtest7' %}active{% endif %}">Backtest PP7</a>
+        <a href="{{ url_for('page_paper') }}" class="nav-link {% if nav_active == 'paper' %}active{% endif %}">Paper 1</a>
+        <a href="{{ url_for('page_paper2') }}" class="nav-link {% if nav_active == 'paper2' %}active{% endif %}">Paper 2</a>
+        <a href="{{ url_for('page_paper3') }}" class="nav-link {% if nav_active == 'paper3' %}active{% endif %}">Paper 3</a>
+        <a href="{{ url_for('page_paper4') }}" class="nav-link {% if nav_active == 'paper4' %}active{% endif %}">Paper 4</a>
+        <a href="{{ url_for('page_paper5') }}" class="nav-link {% if nav_active == 'paper5' %}active{% endif %}">Paper 5</a>
       </span>
+      <span class="nav-sep" aria-hidden="true"></span>
+      <a href="{{ url_for('disks.page_strategies') }}" class="nav-link {% if nav_active == 'strategies' %}active{% endif %}">Chiến lược</a>
+      <a href="{{ url_for('disks.page_backtest') }}" class="nav-link {% if nav_active in ('backtest', 'backtest7') %}active{% endif %}">Backtest</a>
       <a href="{{ url_for('page_chart') }}" class="nav-link {% if nav_active == 'chart' %}active{% endif %}">Biểu đồ</a>
-      <a href="{{ url_for('page_real') }}" class="nav-link {% if nav_active == 'real' %}active{% endif %}">Trade thật</a>
+      <a href="{{ url_for('page_real') }}" class="nav-link nav-real {% if nav_active == 'real' %}active{% endif %}">Trade thật</a>
     </nav>
     {% block content %}{% endblock %}
   </div>
+  <script>
+  (function () {  // điện thoại: cuộn menu tới mục đang mở
+    var n = document.getElementById("topNav"), a = n && n.querySelector(".nav-link.active");
+    if (a && n.scrollWidth > n.clientWidth) n.scrollLeft = a.offsetLeft - (n.clientWidth - a.offsetWidth) / 2;
+  })();
+  </script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

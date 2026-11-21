@@ -141,7 +141,7 @@ def backtest_stats(result: dict) -> list:
         streak = max(streak, cur)
     final = float(result.get("final_balance") or 0)
     rows = [
-        ("Cặp", result.get("symbol")), ("Phương pháp", f"PP{result.get('method')}"),
+        ("Cặp", result.get("symbol")), ("Phương pháp", result.get("label") or f"PP{result.get('method')}"),
         ("Từ", _time(result.get("start"))), ("Đến", _time(result.get("end"))),
         ("Vốn ban đầu", round(cap0, 2)), ("Vốn cuối", round(final, 2)),
         ("Lời/lỗ (USDT)", round(final - cap0, 2)),

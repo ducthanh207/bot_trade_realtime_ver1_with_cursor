@@ -42,7 +42,16 @@ def get_trading_method() -> str:
 
 def get_method_label(method: str = None) -> str:
     m = method if method is not None else get_trading_method()
-    return _LABELS.get(m, _LABELS[METHOD_1])
+    if m in _LABELS:
+        return _LABELS[m]
+    try:  # [2026-11-21] đĩa nạp từ web: tên trong đĩa
+        from strategy.disks import find_disk
+        d = find_disk(m)
+        if d is not None:
+            return f"Đĩa {d.label} — {d.name}"
+    except Exception:
+        pass
+    return _LABELS[METHOD_1]
 
 
 def uses_pct_change_bands(method: str) -> bool:

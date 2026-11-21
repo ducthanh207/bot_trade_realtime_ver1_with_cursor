@@ -17,11 +17,7 @@ from config import settings
 from bot.paper_fees import linear_taker_fee_usdt
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 from strategy.signals import long_exit, long_exit_early, short_exit, short_exit_early
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61, METHOD_7
-
-# [2026-11-14] PP6 = PP4 + CVD, PP6.1 = PP5 + CVD; [2026-11-20] PP7 = PP4 + size rủi ro + stop 4H
-_M4_FAMILY = (METHOD_4, METHOD_5, METHOD_6, METHOD_61, METHOD_7)
-_M5_FAMILY = (METHOD_5, METHOD_61)
+from strategy.disks import get_disk  # [2026-11-21] khung + khối của đĩa chiến lược thay cho so sánh mã PP
 from strategy.risk import (
     check_atr_trailing,
     limit_pnl_and_exit_price,
@@ -103,6 +99,7 @@ def compute_exit_candidates(
     candidates: List[Candidate] = []
     if not open_trade:
         return candidates
+    disk = get_disk(method)
 
     entry = float(open_trade["entry_price"])
     size = float(open_trade["size"])
@@ -113,7 +110,7 @@ def compute_exit_candidates(
     last_check = open_trade.get("last_sl_check")
     if last_check is not None and not df_1m.empty:
         df_slice = df_1m.loc[df_1m.index >= last_check]
-        if method != METHOD_7:  # [2026-11-20] PP7 giữ ATR 4H lúc vào lệnh
+        if not disk.stop4h:  # [2026-11-20] PP7 giữ ATR 4H lúc vào lệnh
             refresh_atr_from_1h(open_trade, df_1h)
         margin = open_trade["margin"]
         notional = open_trade["notional"]
@@ -121,7 +118,7 @@ def compute_exit_candidates(
 
         # Method 4: hard stop — thoát ngay khi giá chạm mức lỗ max_loss (không chỉ giới hạn PnL trên giấy)
         hard_stop_px = None
-        if method in _M4_FAMILY and size > 0:
+        if disk.m4 and size > 0:
             hard_stop_px = entry - max_loss / size if side == "LONG" else entry + max_loss / size
 
         liq_px = entry + (maint - margin) / size if side == "LONG" else entry - (maint - margin) / size
@@ -168,7 +165,7 @@ def compute_exit_candidates(
     if apply_4h_layer and sig_exit:
         pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
         take = True
-        if method == METHOD_2:
+        if disk.pp2:
             take = pnl_raw > 0 and rev
         if take:
             pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
@@ -177,10 +174,10 @@ def compute_exit_candidates(
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EXIT"))
 
     # Method 4: tầng early thường được thay bằng Exit B (RSI vượt ngưỡng + slope N nến) bên dưới
-    if apply_4h_layer and allow_early_exit and sig_early and method not in _M4_FAMILY:
+    if apply_4h_layer and allow_early_exit and sig_early and not disk.m4:
         pnl_raw = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
         take = True
-        if method == METHOD_2:
+        if disk.pp2:
             take = pnl_raw > 0 and rev
         if take:
             pnl_lim, px_lim = limit_pnl_and_exit_price(side, entry, size, pnl_raw, max_loss)
@@ -189,15 +186,15 @@ def compute_exit_candidates(
             candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT"))
 
     # ---------- Phương pháp 3/4: Exit B (tang manh — nguong + slope) ----------
-    if (method == METHOD_3 or method in _M4_FAMILY) and df_4h_raw is not None and not df_4h_raw.empty:
+    if disk.m3 and df_4h_raw is not None and not df_4h_raw.empty:
         from strategy.signals import long_early_exit_strong_b, short_early_exit_strong_b
         from config import settings as _s3
-        if method in _M4_FAMILY:
+        if disk.m4:
             confirm_bars = getattr(_s3, "M4_EARLY_EXIT_B_CONFIRM_BARS", 2)
         else:
             confirm_bars = getattr(_s3, "M3_EARLY_EXIT_B_CONFIRM_BARS", 2)
         df_b, i_last = df_4h_raw, len(df_4h_raw) - 1
-        if method in _M5_FAMILY:
+        if disk.daily:
             # [2026-11-07] PP5: Exit B đã sửa — tính RSI và xét nến 4H ĐÃ ĐÓNG (PP3/PP4 giữ nguyên lỗi cũ:
             # df_4h_raw không có cột RSI nên Exit B không bao giờ chạy).
             from strategy.daily_cycle import m5_exit_b_fixed
@@ -205,7 +202,7 @@ def compute_exit_candidates(
                 from strategy.indicators import add_indicators as _add_ind
                 df_b = _add_ind(df_4h_raw.iloc[:-1])
                 i_last = len(df_b) - 1
-        elif method == METHOD_7 and getattr(_s3, "M7_EXIT_B", "off") == "fixed":
+        elif disk.pp7_any and getattr(_s3, "M7_EXIT_B", "off") == "fixed":
             # [2026-11-20] PP7: tùy chọn Exit B đã sửa (mặc định off = giống PP4)
             from strategy.indicators import add_indicators as _add_ind
             df_b = _add_ind(df_4h_raw.iloc[:-1])
@@ -223,7 +220,7 @@ def compute_exit_candidates(
                 candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "4H_EARLY_EXIT_B"))
 
     # ---------- [2026-11-01] Phương pháp 4: cắt lỗ sớm (mặc định tắt, xem strategy/regime.py) ----------
-    if method == METHOD_4:
+    if disk.regime:
         from strategy.regime import m4_invalidation_hit, m4_time_stop_hit
         pnl_now = (exit_px_ref - entry) * size if side == "LONG" else (entry - exit_px_ref) * size
         # (A) Tín hiệu thất bại: xét nến 1H vừa đóng (iloc[-2]) ở MỌI vòng lặp, không chờ mốc 4H
@@ -242,7 +239,7 @@ def compute_exit_candidates(
 
     # ---------- [2026-11-14] PP6 / PP6.1: CVD 1H ngược lệnh → siết trailing (hoặc đóng, M6_EXIT_MODE=close) ----------
     # Xét nến 1H vừa đóng (iloc[-2]) ở mọi vòng lặp; cvd_exit_step tự bỏ qua nến đã đếm. Cần cột taker_buy.
-    if method in (METHOD_6, METHOD_61) and df_1h is not None and len(df_1h) >= 3:
+    if disk.cvd and df_1h is not None and len(df_1h) >= 3:
         from strategy.cvd import has_taker, last_ratio, cvd_exit_step
         if has_taker(df_1h):
             closed_1h = df_1h.iloc[:-1]
@@ -255,8 +252,8 @@ def compute_exit_candidates(
                 candidates.append((exit_time_ts, pnl_lim - fee_out, exit_px, "CVD_EXIT"))
 
     # ---------- Phương pháp 2 (và lệnh đi ngang của PP5): TP theo %change ----------
-    pct_tp = method == METHOD_2 or (
-        method in _M5_FAMILY and open_trade.get("m5_wide") and getattr(settings, "M5_WIDE_PCT_TP", True)
+    pct_tp = disk.pp2 or (
+        disk.daily and open_trade.get("m5_wide") and getattr(settings, "M5_WIDE_PCT_TP", True)
     )
     if pct_tp and df_4h_raw is not None and not df_4h_raw.empty:
         bands = build_pct_change_avg_bands_series(df_4h_raw, lookback_trades=lookback_trades)

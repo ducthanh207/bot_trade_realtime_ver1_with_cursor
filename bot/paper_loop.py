@@ -27,6 +27,7 @@ from bot.slot_engine import (
     FOUR_H_BOUNDARY_WINDOW_MINUTES,
 )
 import bot.state as state
+from bot import disk_paper
 
 
 MIN_KLINES_4H = 80
@@ -84,23 +85,45 @@ _CB_SLOT_API = {
 
 
 # [2026-11-07] Nến 1D cho PP5: tải lại tối đa mỗi 10 phút (nến ngày chỉ đổi lúc 07:00 VN)
-_DAILY_CACHE = {"t": 0.0, "df": None}
+# [2026-11-21] theo từng cặp (đĩa paper có thể chạy cặp khác SYMBOL)
+_DAILY_CACHE = {}
 DAILY_REFRESH_SEC = 600
+MAX_EXTRA_SYMBOLS = 3  # đĩa paper chạy cặp khác SYMBOL: tối đa 3 cặp (mỗi cặp 3 request nến / vòng)
 
 
 def get_daily_klines(client, symbol):
     """Nến 1D (gồm nến đang chạy; MarketContext.daily_info tự bỏ). Lỗi mạng → dùng bản cũ."""
     now = time.monotonic()
-    df = _DAILY_CACHE["df"]
-    if df is None or now - _DAILY_CACHE["t"] >= DAILY_REFRESH_SEC:
+    c = _DAILY_CACHE.setdefault(symbol, {"t": 0.0, "df": None})
+    df = c["df"]
+    if df is None or now - c["t"] >= DAILY_REFRESH_SEC:
         try:
             new = client.get_klines(symbol, "1d", int(getattr(settings, "M5_DAILY_KLINES", 1000)) + 1)
             if new is not None and not new.empty:
-                _DAILY_CACHE.update(t=now, df=new)
+                c.update(t=now, df=new)
                 df = new
         except Exception:
             pass
     return df
+
+
+def _load_market(client, symbol, need_daily):
+    """[2026-11-21] Nến 4H/1m/1H (+1D) của một cặp như vòng chính, cho đĩa paper chạy cặp khác SYMBOL."""
+    if not client.is_connected():
+        return None
+    df_4h_raw = client.get_klines_4h(symbol, limit=200)
+    df_1m = client.get_klines_1m(symbol, limit=500)
+    if df_4h_raw.empty or len(df_4h_raw) < 20:
+        return None
+    df_1h = pd.DataFrame()
+    try:
+        raw = client.get_klines_1h(symbol, limit=200)
+        if not raw.empty:
+            df_1h = add_indicators(raw)
+    except Exception:
+        pass
+    df_1d = get_daily_klines(client, symbol) if need_daily else None
+    return MarketContext(df_4h_raw, df_1m, df_1h, _is_4h_boundary_window(), df_1d=df_1d)
 
 
 def _update_slot_circuit_breaker(slot_id: int, pnl: float, balance: float, closed_trade: dict):
@@ -262,6 +285,12 @@ def warm_up_klines(client: BinanceClient, symbol: str, notify_func=None) -> bool
     return False
 
 
+def _disk_needs_daily(disk_id):
+    from strategy.disks import find_disk
+    d = find_disk(disk_id)
+    return bool(d and d.daily)
+
+
 def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
     state.set_bot_started_at()
     symbol = settings.SYMBOL
@@ -273,7 +302,7 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
         try:
             if (state.get_paper_status() == "stopped" and state.get_paper2_status() == "stopped"
                     and state.get_paper3_status() == "stopped" and state.get_paper4_status() == "stopped"
-                    and state.get_paper5_status() == "stopped"):
+                    and state.get_paper5_status() == "stopped" and not disk_paper.active_ids()):
                 time.sleep(settings.LOOP_INTERVAL_SEC)
                 continue
 
@@ -299,7 +328,9 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
 
             # PP5 (slot 5) cần nến 1D; chỉ tải khi slot 5 không dừng
             df_1d = None
-            if state.get_paper5_status() != "stopped" and client.is_connected():
+            disk_ids = disk_paper.active_ids()  # [2026-11-21] khe paper của các đĩa (PP6, PP6.1, PP7, đĩa nạp)
+            disk_daily = any(disk_paper.slot(d)["symbol"] == symbol and _disk_needs_daily(d) for d in disk_ids)
+            if (state.get_paper5_status() != "stopped" or disk_daily) and client.is_connected():
                 df_1d = get_daily_klines(client, symbol)
             mkt = MarketContext(df_4h_raw, df_1m, df_1h, _is_4h_boundary_window(), df_1d=df_1d)
             if df_1d is not None:
@@ -313,6 +344,20 @@ def run_paper_loop(client: BinanceClient, notify_func=None, status_func=None):
 
             for slot_id, method, api in _paper_slot_configs(notify_func):
                 step_slot(slot_id, method, api, mkt)
+
+            if disk_ids:
+                markets = {symbol: mkt}
+
+                def get_market(sym, need_daily):
+                    if sym not in markets:
+                        extra = [k for k in markets if k != symbol]
+                        markets[sym] = None if len(extra) >= MAX_EXTRA_SYMBOLS else _load_market(client, sym, need_daily)
+                    return markets[sym]
+                try:
+                    disk_paper.step_all(get_market)
+                except Exception as e:
+                    if notify_func:
+                        notify_func(f"[PAPER đĩa] ❌ Lỗi: {e}")
 
             now = datetime.now(_tz_app)
             if status_func and last_status_min is not None:

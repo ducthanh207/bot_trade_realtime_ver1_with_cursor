@@ -50,6 +50,8 @@ class BinanceClient:
                 "low": float(k[3]),
                 "close": float(k[4]),
                 "volume": float(k[5]) if len(k) > 5 else 0,
+                # [2026-11-21] taker buy base volume → CVD cho đĩa có khối cvd (PP6, PP6.1). Cột thêm, PP1–PP5 không đọc.
+                **({"taker_buy": float(k[9])} if len(k) > 9 else {}),
             })
         df = pd.DataFrame(rows).set_index("timestamp")
         df.index.name = "timestamp"

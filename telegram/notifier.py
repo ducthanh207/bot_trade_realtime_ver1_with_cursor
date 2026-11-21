@@ -226,6 +226,26 @@ def _format_dt(v):
     return s[:16] if len(s) > 16 else s
 
 
+def _slot_tag(paper_slot):
+    """(slot số, tag, đòn bẩy của khe đĩa hoặc None). [2026-11-21] khe paper của đĩa: "disk:<id>" → [ĐĨA PP7]."""
+    if isinstance(paper_slot, str) and paper_slot.startswith("disk:"):
+        did = paper_slot[5:]
+        label, lev = did, None
+        try:
+            from strategy.disks import get_disk
+            from bot import disk_paper
+            label = get_disk(did).label
+            lev = float(disk_paper.slot(did).get("leverage") or 0) or None
+        except Exception:
+            pass
+        return 0, f"[ĐĨA {label}]", lev
+    try:
+        slot = int(paper_slot or 1)
+    except (TypeError, ValueError):
+        slot = 1
+    return slot, ("[PAPER]" if slot == 1 else f"[PAPER{slot}]"), None
+
+
 def notify_trade_closed(closed: dict, source: str = "loop", paper_slot: int = None) -> bool:
     """
     Gửi thông báo đóng lệnh (paper hoặc sau này live).
@@ -235,11 +255,7 @@ def notify_trade_closed(closed: dict, source: str = "loop", paper_slot: int = No
     if not closed:
         return False
     try:
-        try:
-            slot = int(paper_slot if paper_slot is not None else closed.get("paper_slot") or 1)
-        except (TypeError, ValueError):
-            slot = 1
-        tag = "[PAPER]" if slot == 1 else f"[PAPER{slot}]"
+        slot, tag, disk_lev = _slot_tag(paper_slot if paper_slot is not None else closed.get("paper_slot"))
         side = str(closed.get("side", "")).upper()
         profit = float(closed.get("profit", 0))
         cap_before = float(closed.get("capital_before") or 0)
@@ -247,10 +263,12 @@ def notify_trade_closed(closed: dict, source: str = "loop", paper_slot: int = No
         entry_px = closed.get("entry_price")
         exit_px = closed.get("exit_price")
         reason = closed.get("exit_reason") or "—"
-        leverage = getattr(settings, "LEVERAGE", 20.0)
+        leverage = disk_lev or getattr(settings, "LEVERAGE", 20.0)
         try:
             from bot import state
-            if slot == 5:
+            if disk_lev:
+                pass
+            elif slot == 5:
                 leverage = state.get_paper5_leverage() or leverage
             elif slot == 4:
                 leverage = state.get_paper4_leverage() or leverage
@@ -302,11 +320,7 @@ def notify_trade_opened(open_trade: dict, source: str = "loop", paper_slot: int 
     if not open_trade:
         return False
     try:
-        try:
-            slot = int(paper_slot if paper_slot is not None else open_trade.get("paper_slot") or 1)
-        except (TypeError, ValueError):
-            slot = 1
-        tag = "[PAPER]" if slot == 1 else f"[PAPER{slot}]"
+        slot, tag, _ = _slot_tag(paper_slot if paper_slot is not None else open_trade.get("paper_slot"))
         side = str(open_trade.get("side", "")).upper()
         entry_px = float(open_trade.get("entry_price") or 0)
         size = float(open_trade.get("size") or 0)
