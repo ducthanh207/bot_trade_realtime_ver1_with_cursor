@@ -172,3 +172,13 @@ M6_TIGHT_ATR_MULT = float(os.environ.get("M6_TIGHT_ATR_MULT", "1.5"))        # h
 # PP6.1: chu kỳ ngày đi ngang thì chọn phía theo: cvd = độ dốc CVD 4H dài (mặc định) | close = như PP5 | both = cả hai phải cùng phía
 M61_SIDEWAYS_BIAS = os.environ.get("M61_SIDEWAYS_BIAS", "cvd").strip().lower()
 M61_SIDE_CVD_BARS = int(os.environ.get("M61_SIDE_CVD_BARS", "12"))           # số nến 4H cho phía đi ngang (12 = 2 ngày)
+
+# ---------- [2026-11-20] Method 7 = PP4 + size theo rủi ro + lọc trend luôn bật + stop theo khung 4H ----------
+# Chỉ chạy trong backtest (--methods 7) và trang web /backtest7. Bot paper/live KHÔNG dùng PP7.
+# Giải thích: docs/PP7_RISK_TREND_4H.md, code: strategy/pp7.py
+M7_RISK_PCT = float(os.environ.get("M7_RISK_PCT", "0.02"))                # % vốn mất nếu chạm stop ban đầu (0.02 = 2%)
+M7_ATR4H_MULT = float(os.environ.get("M7_ATR4H_MULT", "1.5"))             # stop + trailing = hệ số × ATR14 nến 4H lúc vào lệnh
+M7_TREND_FILTER = _env_bool("M7_TREND_FILTER", "true")                    # LONG chỉ khi giá đóng 4H > EMA50, SHORT khi < EMA50 (bất kể ADX)
+M7_TREND_SLOPE_BARS = int(os.environ.get("M7_TREND_SLOPE_BARS", "0"))     # >0: EMA50 phải dốc cùng hướng so với N nến 4H trước
+M7_MAX_STOP_CAPITAL_PCT = float(os.environ.get("M7_MAX_STOP_CAPITAL_PCT", "0.05"))  # hard stop an toàn (% vốn), xa hơn stop thường
+M7_EXIT_B = os.environ.get("M7_EXIT_B", "off").strip().lower()            # off = như PP4 (không chạy) | fixed = Exit B đã sửa (RSI 4H đã đóng)

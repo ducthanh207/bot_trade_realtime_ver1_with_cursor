@@ -86,6 +86,9 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
         from strategy.daily_cycle import m5_trailing_multiplier
         from strategy.cvd import cvd_trailing_multiplier
         mult = cvd_trailing_multiplier(open_trade, m5_trailing_multiplier(open_trade, getattr(row_1m, "name", None)))
+    elif str(open_trade.get("trading_method", "")) == "7":
+        # [2026-11-20] PP7: open_trade["atr"] là ATR nến 4H lúc vào lệnh (không refresh theo 1H), hệ số cố định
+        mult = settings.M7_ATR4H_MULT
     else:
         mult = open_trade.get("atr_multiplier_override") or settings.ATR_MULTIPLIER
     trail_dist = atr * mult

@@ -17,10 +17,10 @@ from config import settings
 from bot.paper_fees import linear_taker_fee_usdt
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
 from strategy.signals import long_exit, long_exit_early, short_exit, short_exit_early
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61, METHOD_7
 
-# [2026-11-14] PP6 = PP4 + CVD, PP6.1 = PP5 + CVD
-_M4_FAMILY = (METHOD_4, METHOD_5, METHOD_6, METHOD_61)
+# [2026-11-14] PP6 = PP4 + CVD, PP6.1 = PP5 + CVD; [2026-11-20] PP7 = PP4 + size rủi ro + stop 4H
+_M4_FAMILY = (METHOD_4, METHOD_5, METHOD_6, METHOD_61, METHOD_7)
 _M5_FAMILY = (METHOD_5, METHOD_61)
 from strategy.risk import (
     check_atr_trailing,
@@ -113,7 +113,8 @@ def compute_exit_candidates(
     last_check = open_trade.get("last_sl_check")
     if last_check is not None and not df_1m.empty:
         df_slice = df_1m.loc[df_1m.index >= last_check]
-        refresh_atr_from_1h(open_trade, df_1h)
+        if method != METHOD_7:  # [2026-11-20] PP7 giữ ATR 4H lúc vào lệnh
+            refresh_atr_from_1h(open_trade, df_1h)
         margin = open_trade["margin"]
         notional = open_trade["notional"]
         maint = settings.MAINT_MARGIN_RATE * notional
@@ -204,6 +205,11 @@ def compute_exit_candidates(
                 from strategy.indicators import add_indicators as _add_ind
                 df_b = _add_ind(df_4h_raw.iloc[:-1])
                 i_last = len(df_b) - 1
+        elif method == METHOD_7 and getattr(_s3, "M7_EXIT_B", "off") == "fixed":
+            # [2026-11-20] PP7: tùy chọn Exit B đã sửa (mặc định off = giống PP4)
+            from strategy.indicators import add_indicators as _add_ind
+            df_b = _add_ind(df_4h_raw.iloc[:-1])
+            i_last = len(df_b) - 1
         if apply_4h_layer and allow_early_exit:
             if side == "LONG":
                 strong_b = long_early_exit_strong_b(df_b, i_last, confirm_bars)

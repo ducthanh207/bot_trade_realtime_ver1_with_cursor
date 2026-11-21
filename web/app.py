@@ -258,6 +258,14 @@ def page_paper5():
     return _html_no_cache("paper5.html", nav_active="paper5")
 
 
+@app.route("/backtest7")
+def page_backtest7():
+    """[2026-11-20] PP7 chỉ có backtest (không có paper/live): trang riêng chỉ gồm khung backtest."""
+    from config import settings as _cfg
+    return _html_no_cache("backtest7.html", nav_active="backtest7", risk_pct=float(_cfg.M7_RISK_PCT),
+                          atr_mult=float(_cfg.M7_ATR4H_MULT))
+
+
 def _save_paper_state_silent():
     try:
         from bot.paper_persistence import save_paper_state
@@ -1173,6 +1181,7 @@ def _start_web_backtest(slot: int):
         3: (state.get_paper3_leverage, state.get_paper3_wallet_pct),
         4: (state.get_paper4_leverage, state.get_paper4_wallet_pct),
         5: (state.get_paper5_leverage, state.get_paper5_wallet_pct),
+        7: (state.get_paper4_leverage, state.get_paper4_wallet_pct),  # PP7 không có paper riêng → dùng quy tắc vốn Paper 4
     }
     get_lev, get_wct = getters[slot]
     start_str = str(data.get("start_date") or "")
@@ -1227,6 +1236,11 @@ def api_paper4_backtest():
 @app.route("/api/paper5/backtest", methods=["POST"])
 def api_paper5_backtest():
     return _start_web_backtest(5)
+
+
+@app.route("/api/pp7/backtest", methods=["POST"])
+def api_pp7_backtest():
+    return _start_web_backtest(7)
 
 
 @app.route("/api/backtest/job/<job_id>")

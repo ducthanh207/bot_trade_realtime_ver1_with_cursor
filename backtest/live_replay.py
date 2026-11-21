@@ -47,7 +47,7 @@ from strategy.risk import (
     m3_streak_multiplier,
 )
 from strategy.exit_engine import compute_exit_candidates, pick_best_exit
-from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61
+from strategy.strategies.registry import METHOD_1, METHOD_2, METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61, METHOD_7
 from strategy.regime import (
     classify_regime,
     m4_regime_entry_decision,
@@ -56,14 +56,15 @@ from strategy.regime import (
 )
 from strategy.daily_cycle import daily_cycle_info, m5_entry_plan, m5_apply_cycle_to_payload
 from strategy import cvd as cvd_mod
+from strategy.pp7 import m7_trend_allows, m7_stop_distance, m7_size_and_margin
 
 H1 = pd.Timedelta(hours=1)
 H4 = pd.Timedelta(hours=4)
 ALL_METHODS = (METHOD_1, METHOD_2, METHOD_3, METHOD_4)  # mặc định khi không truyền --methods
-# [2026-11-07] PP5 chỉ chạy khi chọn --methods 5; [2026-11-14] PP6 / PP6.1 (CVD) khi chọn 6 / 6.1
-METHOD_CHOICES = ALL_METHODS + (METHOD_5, METHOD_6, METHOD_61)
-_M3_FAMILY = (METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61)
-_M4_FAMILY = (METHOD_4, METHOD_5, METHOD_6, METHOD_61)
+# [2026-11-07] PP5 chỉ chạy khi chọn --methods 5; [2026-11-14] PP6 / PP6.1 (CVD) khi chọn 6 / 6.1; [2026-11-20] PP7 khi chọn 7
+METHOD_CHOICES = ALL_METHODS + (METHOD_5, METHOD_6, METHOD_61, METHOD_7)
+_M3_FAMILY = (METHOD_3, METHOD_4, METHOD_5, METHOD_6, METHOD_61, METHOD_7)
+_M4_FAMILY = (METHOD_4, METHOD_5, METHOD_6, METHOD_61, METHOD_7)
 _M5_FAMILY = (METHOD_5, METHOD_61)  # cần nến ngày
 _CVD_FAMILY = (METHOD_6, METHOD_61)  # cần nến 1H có taker buy
 D1 = pd.Timedelta(days=1)
@@ -238,6 +239,14 @@ class MarketData:
             self._daily_cache[key] = v
         return v
 
+    @staticmethod
+    def _ema_ref(m3):
+        """[2026-11-20] PP7: EMA50 của M7_TREND_SLOPE_BARS nến 4H trước nến vừa đóng (None nếu tắt / thiếu dữ liệu)."""
+        n = int(getattr(settings, "M7_TREND_SLOPE_BARS", 0) or 0)
+        if n <= 0 or "EMA_TREND" not in m3 or len(m3) <= n:
+            return None
+        return _f(m3["EMA_TREND"].iloc[-1 - n])
+
     def context_at(self, i: int):
         """Dữ liệu paper_loop thấy ở tick đầu nến 4H mở lúc t = idx[i]; None nếu chưa đủ dữ liệu."""
         t, open_px = self.idx[i], float(self.o[i])
@@ -248,9 +257,13 @@ class MarketData:
             if rows is None or rows[0].name != t_closed or rows[1].name != t_prev:
                 return None
             row_closed, prev_row_closed, row_m3 = rows
-            regime = {}
-            if settings.M4_REGIME_ENABLED and row_m3 is not None:  # cần cả chuỗi M3 → tính, không lưu
-                regime = classify_regime(self._m3(raw4))
+            regime, ema_ref = {}, None
+            need_m3 = row_m3 is not None and (settings.M4_REGIME_ENABLED or int(settings.M7_TREND_SLOPE_BARS) > 0)
+            if need_m3:  # cần cả chuỗi M3 → tính, không lưu
+                m3 = self._m3(raw4)
+                if settings.M4_REGIME_ENABLED:
+                    regime = classify_regime(m3)
+                ema_ref = self._ema_ref(m3)  # [2026-11-20] PP7
             ind1 = self._ind1_tail(t - H1)
             if len(ind1) >= 2 and ind1.index[-1] == t - H1:
                 last = ind1.iloc[[-1]].copy()
@@ -262,6 +275,7 @@ class MarketData:
                 "row_closed": row_closed, "prev_row_closed": prev_row_closed, "row_m3": row_m3,
                 "df_1h": df_1h, "df_4h_raw": self._with_forming(raw4, t, open_px),
                 "regime": regime,  # [2026-11-01]
+                "ema_ref": ema_ref,  # [2026-11-20] PP7
             }
         if t_closed not in self.ind4.index or t_prev not in self.ind4.index:
             return None
@@ -275,12 +289,14 @@ class MarketData:
         regime = {}
         if settings.M4_REGIME_ENABLED and t_closed in self.ind4_m3.index:
             regime = classify_regime(self.ind4_m3.loc[:t_closed])  # [2026-11-01]
+        ema_ref = self._ema_ref(self.ind4_m3.loc[:t_closed]) if t_closed in self.ind4_m3.index else None
         return {
             "row_closed": self.ind4.loc[t_closed], "prev_row_closed": self.ind4.loc[t_prev],
             "row_m3": self.ind4_m3.loc[t_closed] if t_closed in self.ind4_m3.index else None,
             "df_1h": df_1h,
             "df_4h_raw": self._with_forming(self._past(self.df4_raw, t_closed), t, open_px),
             "regime": regime,
+            "ema_ref": ema_ref,
         }
 
 
@@ -345,9 +361,10 @@ class SlotSim:
     def step_layer1(self, md: "MarketData", i: int) -> list:
         """Tick đầu phút i: refresh ATR 1H, quét nến 1m vừa đóng (i-1) rồi nến đang chạy (i, mới có giá mở)."""
         ot = self.open_trade
-        atr = md.atr_at(i)
-        if not np.isnan(atr) and atr > 0:
-            ot["atr"] = float(atr)  # refresh_atr_from_1h
+        if self.method != METHOD_7:  # [2026-11-20] PP7 giữ ATR 4H lúc vào lệnh
+            atr = md.atr_at(i)
+            if not np.isnan(atr) and atr > 0:
+                ot["atr"] = float(atr)  # refresh_atr_from_1h
         t, prev_t = md.idx[i], md.idx[i - 1]
         c = None
         if prev_t >= ot["last_sl_check"]:
@@ -412,7 +429,8 @@ class SlotSim:
                 self.cb_heavy_until = now + timedelta(hours=settings.M3_CB_HEAVY_BARS * 4)
 
     # ----- Vào lệnh (giống paper_loop, nhánh "not open_trade and running and in_4h_window") -----
-    def try_enter(self, md: MarketData, t, entry_px, prev_row_closed, row_closed, row_m3, df_1h, regime_info=None):
+    def try_enter(self, md: MarketData, t, entry_px, prev_row_closed, row_closed, row_m3, df_1h, regime_info=None,
+                  ema_ref=None):
         method = self.method
         if method in _M3_FAMILY:
             if self.cb_heavy_until and t < self.cb_heavy_until:
@@ -462,7 +480,11 @@ class SlotSim:
             if not allow:
                 return
             size_mult = adx_size_mult
-            if adx_val > getattr(settings, "M3_EMA_TREND_ADX_ABOVE", 30.0):
+            if method == METHOD_7:
+                # [2026-11-20] PP7: lọc trend EMA50 luôn bật (PP4 chỉ lọc khi ADX > 30)
+                if not m7_trend_allows(side, row_m3.get("close"), row_m3.get("EMA_TREND"), ema_ref):
+                    return
+            elif adx_val > getattr(settings, "M3_EMA_TREND_ADX_ABOVE", 30.0):
                 ema_trend_val = float(row_m3.get("EMA_TREND", 0.0) or 0.0)
                 close_val = float(row_m3.get("close", 0.0) or 0.0)
                 if ema_trend_val > 0 and close_val > 0:
@@ -483,15 +505,27 @@ class SlotSim:
         if method in _M5_FAMILY and m5_counter:  # [2026-11-08] lệnh ngược chu kỳ (mặc định không có)
             size_mult *= float(m5_size)
 
-        size, margin, notional = size_and_margin(self.balance, entry_px, leverage=self.leverage, wallet_pct=self.wallet_pct)
-        if method in _M3_FAMILY and size_mult < 1.0:
-            size, margin, notional = size * size_mult, margin * size_mult, notional * size_mult
+        m7_dist = None
+        if method == METHOD_7:
+            # [2026-11-20] PP7: size theo rủi ro, stop = M7_ATR4H_MULT × ATR 4H của nến vừa đóng
+            m7_dist = m7_stop_distance(row_closed.get("ATR"))
+            if m7_dist is None:
+                return
+            size, margin, notional = m7_size_and_margin(self.balance, entry_px, m7_dist, size_mult,
+                                                        self.leverage, self.wallet_pct)
+        else:
+            size, margin, notional = size_and_margin(self.balance, entry_px, leverage=self.leverage, wallet_pct=self.wallet_pct)
+            if method in _M3_FAMILY and size_mult < 1.0:
+                size, margin, notional = size * size_mult, margin * size_mult, notional * size_mult
         if size <= 0 or margin > self.balance:
             return
         fee_in = linear_taker_fee_usdt(size, entry_px, float(settings.TAKER_FEE))
 
         atr_now = atr_1h_at_entry(df_1h, float(row_closed["ATR"]))
-        if method == METHOD_3:
+        if method == METHOD_7:
+            atr_now = float(row_closed["ATR"])
+            atr_mult_now = settings.M7_ATR4H_MULT
+        elif method == METHOD_3:
             # Live gọi m3_atr_multiplier(datetime.now()) ngay lúc mở → luôn ra hệ số grace
             atr_mult_now = settings.M3_ATR_MULTIPLIER_GRACE
         elif method in _M4_FAMILY:
@@ -531,6 +565,8 @@ class SlotSim:
             m5_apply_cycle_to_payload(ot, side, m5_info, m5_wide, m5_counter)
         if method in _CVD_FAMILY:
             cvd_mod.apply_cvd_to_payload(ot, cvd.get("r4"), cvd.get("r1"), cvd.get("r_side"))
+        if method == METHOD_7:
+            ot["max_stop_capital_pct"] = settings.M7_MAX_STOP_CAPITAL_PCT
         self.open_trade = ot
         self.balance -= fee_in
         self._prepare_risk()
@@ -609,7 +645,7 @@ def run_symbol(md: MarketData, start, methods, capital, leverage, wallet_pct, lo
             for s in slots:
                 if s.open_trade is None:
                     s.try_enter(md, t, float(o[i]), ctx["prev_row_closed"], ctx["row_closed"], ctx["row_m3"], ctx["df_1h"],
-                                ctx.get("regime"))
+                                ctx.get("regime"), ctx.get("ema_ref"))
 
         if any(s.open_trade is not None for s in slots):
             i += 1
@@ -736,7 +772,7 @@ def _backtest_one(job):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Backtest phát lại vòng lặp live (PP1–PP6.1) trên nhiều cặp coin.")
+    p = argparse.ArgumentParser(description="Backtest phát lại vòng lặp live (PP1–PP7) trên nhiều cặp coin.")
     p.add_argument("--symbols", nargs="+", default=None, help="Ví dụ: BTCUSDT ETHUSDT SOLUSDT (mặc định: SYMBOL trong .env)")
     p.add_argument("--universe", choices=["volume", "marketcap", "both"], default=None,
                    help="Tự chọn cặp: volume = biến động volume lớn nhất trong khoảng backtest; marketcap = vốn hoá lớn nhất; both = cả 2 nhóm")
@@ -747,7 +783,7 @@ def main(argv=None):
     p.add_argument("--start", default=None, help="YYYY-MM-DD (mặc định: 365 ngày trước)")
     p.add_argument("--end", default=None, help="YYYY-MM-DD, không gồm ngày này (mặc định: hôm nay)")
     p.add_argument("--methods", nargs="+", default=list(ALL_METHODS), choices=list(METHOD_CHOICES),
-                   help="Mặc định 1 2 3 4. Thêm 5 (PP4 + chu kỳ ngày), 6 (PP4 + CVD), 6.1 (PP5 + CVD), vd --methods 4 6 5 6.1")
+                   help="Mặc định 1 2 3 4. Thêm 5 (PP4 + chu kỳ ngày), 6 (PP4 + CVD), 6.1 (PP5 + CVD), 7 (PP4 + size theo rủi ro + lọc trend + stop 4H), vd --methods 4 6 5 6.1 7")
     p.add_argument("--capital", type=float, default=settings.CAPITAL_START)
     p.add_argument("--leverage", type=float, default=settings.LEVERAGE)
     p.add_argument("--wallet-pct", type=float, default=settings.WALLET_PCT)
