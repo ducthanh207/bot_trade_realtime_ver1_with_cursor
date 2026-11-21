@@ -32,7 +32,7 @@ from bot.slot_engine import MarketContext, step_slot, update_circuit_breaker, is
 from exchange.binance_futures import BinanceFuturesTrader, BinanceAPIError, ENV_LABELS
 from strategy import add_indicators
 from strategy.risk import max_loss_from_capital
-from strategy.strategies.registry import METHOD_3, METHOD_4, METHOD_5
+from strategy.disks import get_disk  # [2026-11-21] khung + khối của đĩa chiến lược
 from live import store
 
 _tz_app = getattr(settings, "GMT7", timezone.utc)
@@ -230,7 +230,7 @@ class LiveEngine:
         markets = {}
         for sym in sorted({b["symbol"] for b in active}):
             try:
-                need_daily = any(b["symbol"] == sym and str(b.get("method")) == METHOD_5 for b in active)
+                need_daily = any(b["symbol"] == sym and get_disk(b.get("method")).daily for b in active)
                 markets[sym] = self._load_market(sym, in_window, need_daily)
             except Exception as e:
                 self._error(f"mkt:{sym}", f"Không tải được nến {sym}: {e}")
@@ -543,7 +543,7 @@ class LiveEngine:
         st["trades"].append(closed)
         del st["trades"][:-MAX_TRADES_KEPT]
         st["balance"] = capital_after
-        if bot["method"] in (METHOD_3, METHOD_4, METHOD_5):
+        if get_disk(bot["method"]).m3:  # [2026-11-21] khung PP3/PP4 có circuit breaker
             api = self._slot_api(bot, st)
             try:
                 update_circuit_breaker(api["cb"], profit, capital_after)

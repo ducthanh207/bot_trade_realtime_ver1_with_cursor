@@ -82,6 +82,10 @@ try:
 except Exception as _live_err:
     print("[LIVE] Không bật được trang /live:", _live_err)
 
+# [2026-11-21] Trang Chiến lược (kho đĩa) + trang Backtest riêng
+from web.disk_routes import bp as _disk_bp
+app.register_blueprint(_disk_bp)
+
 
 def _serialize(obj):
     if hasattr(obj, "isoformat"):
@@ -256,6 +260,14 @@ def page_paper4():
 @app.route("/paper5")
 def page_paper5():
     return _html_no_cache("paper5.html", nav_active="paper5")
+
+
+@app.route("/backtest7")
+def page_backtest7():
+    """[2026-11-20] PP7 chỉ có backtest (không có paper/live): trang riêng chỉ gồm khung backtest."""
+    from config import settings as _cfg
+    return _html_no_cache("backtest7.html", nav_active="backtest7", risk_pct=float(_cfg.M7_RISK_PCT),
+                          atr_mult=float(_cfg.M7_ATR4H_MULT))
 
 
 def _save_paper_state_silent():
@@ -1173,6 +1185,7 @@ def _start_web_backtest(slot: int):
         3: (state.get_paper3_leverage, state.get_paper3_wallet_pct),
         4: (state.get_paper4_leverage, state.get_paper4_wallet_pct),
         5: (state.get_paper5_leverage, state.get_paper5_wallet_pct),
+        7: (state.get_paper4_leverage, state.get_paper4_wallet_pct),  # PP7 không có paper riêng → dùng quy tắc vốn Paper 4
     }
     get_lev, get_wct = getters[slot]
     start_str = str(data.get("start_date") or "")
@@ -1188,10 +1201,18 @@ def _start_web_backtest(slot: int):
     wallet_pct = float(data.get("wallet_pct") or get_wct() or _cfg.WALLET_PCT)
     wallet_pct = wallet_pct / 100.0 if wallet_pct > 1 else wallet_pct
     symbol = str(data.get("symbol") or getattr(_cfg, "SYMBOL", "BTCUSDT")).upper()
+    # [2026-11-08] PP5: thử lệnh ngược chu kỳ ngay trên web (chỉ trong job backtest, không đổi .env)
+    overrides = {}
+    if slot == 5:
+        overrides = {
+            "long05": {"M5_COUNTER_LONG_SIZE": 0.5},
+            "long1": {"M5_COUNTER_LONG_SIZE": 1.0},
+            "both05": {"M5_COUNTER_LONG_SIZE": 0.5, "M5_COUNTER_SHORT_SIZE": 0.5},
+        }.get(str(data.get("counter") or ""), {})
     job_id = web_backtest.submit(
         method=str(slot), symbol=symbol, start=start_str, end=end_str,
         initial_capital=initial_capital, leverage=leverage, wallet_pct=wallet_pct,
-        lookback_trades=int(getattr(_cfg, "LOOKBACK_TRADES", 15)),
+        lookback_trades=int(getattr(_cfg, "LOOKBACK_TRADES", 15)), overrides=overrides,
     )
     return jsonify({"ok": True, "job_id": job_id, "symbol": symbol, "leverage": leverage, "wallet_pct": wallet_pct})
 
@@ -1221,6 +1242,11 @@ def api_paper5_backtest():
     return _start_web_backtest(5)
 
 
+@app.route("/api/pp7/backtest", methods=["POST"])
+def api_pp7_backtest():
+    return _start_web_backtest(7)
+
+
 @app.route("/api/backtest/job/<job_id>")
 def api_backtest_job(job_id):
     from backtest import web_backtest
@@ -1238,7 +1264,9 @@ def api_backtest_job_xlsx(job_id):
         return jsonify({"error": d.get("error") or "Backtest chưa xong"}), 404
     data = backtest_result_xlsx(d)
     day = lambda v: str(v or "")[:10]
-    name = f"backtest_PP{d.get('method')}_{d.get('symbol')}_{day(d.get('start'))}_{day(d.get('end'))}.xlsx"
+    import re as _re
+    label = _re.sub(r"[^A-Za-z0-9_.-]", "_", str(d.get("label") or f"PP{d.get('method')}"))
+    name = f"backtest_{label}_{d.get('symbol')}_{day(d.get('start'))}_{day(d.get('end'))}.xlsx"
     resp = app.response_class(data, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     resp.headers["Content-Disposition"] = f'attachment; filename="{name}"'
     return resp

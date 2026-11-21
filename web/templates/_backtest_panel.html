@@ -9,6 +9,16 @@
   <input type="date" id="btEndDate">
   <label>Vốn ban đầu</label>
   <input type="number" id="btCapital" value="1000" min="1" step="1">
+  {% if bt_slot == 5 %}
+  {# [2026-11-08] thử biến thể PP5 trên web, không đổi .env / paper / live #}
+  <label>Lệnh ngược chu kỳ</label>
+  <select id="btCounter" style="background:#223;color:#fff;border:1px solid #446;border-radius:4px;padding:3px">
+    <option value="">Chặn (như .env)</option>
+    <option value="long05">LONG ngược × 0.5 size</option>
+    <option value="long1">LONG ngược × 1 (chỉ chặn SHORT khi tăng)</option>
+    <option value="both05">Cả LONG và SHORT ngược × 0.5</option>
+  </select>
+  {% endif %}
   <button type="button" id="btnBacktest">Chạy backtest</button>
   <button type="button" id="btnBtReopen" style="display:none">Xem kết quả</button>
   <span id="backtestResult"></span>
@@ -78,7 +88,7 @@
       var c = x.profit >= 0 ? "#6c6" : "#f66";
       return "<tr><td>" + x.side + "</td><td>" + t(x.entry_time) + "</td><td>" + n(x.entry_price, 2) +
         "</td><td>" + t(x.exit_time) + "</td><td>" + n(x.exit_price, 2) + "</td><td style='color:" + c + "'>" +
-        n(x.profit, 2) + "</td><td>" + n(x.capital_after, 2) + "</td><td>" + x.exit_reason + (x.cycle ? " · " + x.cycle + (x.cycle_wide ? " (nới)" : "") : "") + "</td></tr>";
+        n(x.profit, 2) + "</td><td>" + n(x.capital_after, 2) + "</td><td>" + x.exit_reason + (x.cycle ? " · " + x.cycle + (x.cycle_wide ? " (nới)" : "") + (x.cycle_counter ? " (ngược)" : "") : "") + "</td></tr>";
     }).join("");
     box.innerHTML = "<table><tr><th>Side</th><th>Vào lúc</th><th>Giá vào</th><th>Ra lúc</th><th>Giá ra</th>" +
       "<th>Profit</th><th>Cap After</th><th>Reason</th></tr>" + rows + "</table>";
@@ -166,7 +176,9 @@
   function openModal(d, jobId) {
     last = {d: d, jobId: jobId};
     $("btModalTitle").textContent = "Backtest PP" + d.method + " — " + d.symbol + " — " +
-      String(d.start).slice(0, 10) + " → " + String(d.end).slice(0, 10);
+      String(d.start).slice(0, 10) + " → " + String(d.end).slice(0, 10) +
+      (d.overrides && Object.keys(d.overrides).length ? " — " + Object.keys(d.overrides).map(function(k) {
+        return k.replace("M5_COUNTER_", "ngược ").replace("_SIZE", "") + " ×" + d.overrides[k]; }).join(", ") : "");
     $("btStats").innerHTML = stats(d).map(function(s) {
       var c = s[2] == null ? "#dde" : (s[2] >= 0 ? "#6c6" : "#f77");
       return "<div class='bt-stat'><div class='k'>" + s[0] + "</div><div class='v' style='color:" + c + "'>" + s[1] + "</div></div>";
@@ -246,7 +258,8 @@
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         symbol: $("btSymbol").value.trim(), start_date: $("btStartDate").value,
-        end_date: $("btEndDate").value, initial_capital: capital
+        end_date: $("btEndDate").value, initial_capital: capital,
+        counter: $("btCounter") ? $("btCounter").value : ""
       })
     }).then(function(r) { return r.json(); }).then(function(d) {
       if (d.error) { done(btn, res, d); return; }

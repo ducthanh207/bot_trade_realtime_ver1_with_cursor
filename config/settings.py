@@ -150,3 +150,85 @@ M5_WIDE_SIZE_MULT = float(os.environ.get("M5_WIDE_SIZE_MULT", "0.6"))           
 M5_WIDE_PCT_TP = _env_bool("M5_WIDE_PCT_TP", "true")                             # chốt lời ở dải %change 4H (như PP2)
 # Exit B đã sửa (dùng RSI nến 4H đã đóng): wide = chỉ lệnh đi ngang | all = mọi lệnh PP5 | off = như PP4 (không chạy)
 M5_EXIT_B = os.environ.get("M5_EXIT_B", "wide").strip().lower()
+# [2026-11-08] Lệnh ngược chu kỳ: thay vì chặn hẳn thì cho vào với size × hệ số này. 0 = chặn (như cũ).
+# LONG khi chu kỳ GIẢM / đi ngang thiên SHORT; SHORT khi chu kỳ TĂNG / đi ngang thiên LONG.
+# Ví dụ M5_COUNTER_LONG_SIZE=1.0 → chỉ còn chặn SHORT khi chu kỳ tăng; 0.5 → LONG đánh hồi với nửa size.
+M5_COUNTER_LONG_SIZE = float(os.environ.get("M5_COUNTER_LONG_SIZE", "0"))
+M5_COUNTER_SHORT_SIZE = float(os.environ.get("M5_COUNTER_SHORT_SIZE", "0"))
+
+# ---------- [2026-11-14] PP6 = PP4 + CVD, PP6.1 = PP5 + CVD (xem docs/PP6_CVD.md, strategy/cvd.py) ----------
+# CVD xấp xỉ từ nến Binance: delta = 2 × taker buy base volume − volume. "Độ dốc CVD" trên N nến đã đóng
+# = tổng delta N nến / tổng volume N nến (từ −1 đến +1, > 0 là bên mua chủ động áp đảo).
+M6_4H_BARS = int(os.environ.get("M6_4H_BARS", "6"))                     # số nến 4H đã đóng để xét độ dốc (6 = 24h)
+M6_4H_MIN_RATIO = float(os.environ.get("M6_4H_MIN_RATIO", "0"))         # LONG cần độ dốc > +ngưỡng, SHORT < −ngưỡng
+M6_1H_BARS = int(os.environ.get("M6_1H_BARS", "8"))                     # số nến 1H đã đóng (timing + thoát sớm)
+M6_1H_ENTRY_CONFIRM = _env_bool("M6_1H_ENTRY_CONFIRM")                  # vào lệnh cần thêm độ dốc 1H cùng chiều (mặc định tắt)
+# Thoát theo CVD 1H khi dòng tiền đi ngược lệnh: tighten = siết trailing | close = đóng lệnh ngay | off = tắt
+M6_EXIT_MODE = os.environ.get("M6_EXIT_MODE", "tighten").strip().lower()
+M6_EXIT_AGAINST_RATIO = float(os.environ.get("M6_EXIT_AGAINST_RATIO", "0"))  # LONG: độ dốc 1H < −ngưỡng là "ngược"
+M6_EXIT_CONFIRM_BARS = int(os.environ.get("M6_EXIT_CONFIRM_BARS", "2"))      # số nến 1H liên tiếp ngược mới tính
+M6_EXIT_MIN_HOURS = float(os.environ.get("M6_EXIT_MIN_HOURS", "2"))          # chỉ xét sau N giờ kể từ lúc vào
+M6_TIGHT_ATR_MULT = float(os.environ.get("M6_TIGHT_ATR_MULT", "1.5"))        # hệ số trailing ATR 1H sau khi siết
+# PP6.1: chu kỳ ngày đi ngang thì chọn phía theo: cvd = độ dốc CVD 4H dài (mặc định) | close = như PP5 | both = cả hai phải cùng phía
+M61_SIDEWAYS_BIAS = os.environ.get("M61_SIDEWAYS_BIAS", "cvd").strip().lower()
+M61_SIDE_CVD_BARS = int(os.environ.get("M61_SIDE_CVD_BARS", "12"))           # số nến 4H cho phía đi ngang (12 = 2 ngày)
+
+# ---------- [2026-11-20] Method 7 = PP4 + size theo rủi ro + lọc trend luôn bật + stop theo khung 4H ----------
+# Chỉ chạy trong backtest (--methods 7) và trang web /backtest7. Bot paper/live KHÔNG dùng PP7.
+# Giải thích: docs/PP7_RISK_TREND_4H.md, code: strategy/pp7.py
+M7_RISK_PCT = float(os.environ.get("M7_RISK_PCT", "0.02"))                # % vốn mất nếu chạm stop ban đầu (0.02 = 2%)
+M7_ATR4H_MULT = float(os.environ.get("M7_ATR4H_MULT", "1.5"))             # stop + trailing = hệ số × ATR14 nến 4H lúc vào lệnh
+M7_TREND_FILTER = _env_bool("M7_TREND_FILTER", "true")                    # LONG chỉ khi giá đóng 4H > EMA50, SHORT khi < EMA50 (bất kể ADX)
+M7_TREND_SLOPE_BARS = int(os.environ.get("M7_TREND_SLOPE_BARS", "0"))     # >0: EMA50 phải dốc cùng hướng so với N nến 4H trước
+M7_MAX_STOP_CAPITAL_PCT = float(os.environ.get("M7_MAX_STOP_CAPITAL_PCT", "0.05"))  # hard stop an toàn (% vốn), xa hơn stop thường
+M7_EXIT_B = os.environ.get("M7_EXIT_B", "off").strip().lower()            # off = như PP4 (không chạy) | fixed = Exit B đã sửa (RSI 4H đã đóng)
+
+
+# ---------- [2026-11-21] Tham số riêng theo "đĩa chiến lược" (strategy/disks.py) ----------
+# Mỗi đĩa có thể ghi đè một số tham số ở trên (vd M7_RISK_PCT) CHỈ cho đĩa đó. Ghi đè gắn theo luồng chạy
+# (contextvars), nên paper/backtest của đĩa này không làm đổi giá trị mà bot live hay đĩa khác đang đọc.
+# Chỉ khi có đĩa thật sự dùng tham số riêng thì module này mới chuyển sang chế độ đọc qua lớp ghi đè;
+# đĩa có sẵn PP1–PP7 không ghi đè gì → đọc settings như cũ, không tốn thêm gì.
+import contextlib as _contextlib
+import contextvars as _contextvars
+import sys as _sys
+import types as _types
+
+_OVERRIDES = _contextvars.ContextVar("settings_overrides", default=None)
+
+
+class _SettingsModule(_types.ModuleType):
+    def __getattribute__(self, name):
+        ov = _OVERRIDES.get()
+        if ov is not None and name in ov:
+            return ov[name]
+        return _types.ModuleType.__getattribute__(self, name)
+
+
+def _enable_overrides():
+    mod = _sys.modules[__name__]
+    if not isinstance(mod, _SettingsModule):
+        mod.__class__ = _SettingsModule
+
+
+@_contextlib.contextmanager
+def overrides(values: dict):
+    """Trong khối with: settings.X trả values[X] (chỉ ở luồng hiện tại). values rỗng → không làm gì."""
+    if not values:
+        yield
+        return
+    _enable_overrides()
+    cur = _OVERRIDES.get()
+    merged = dict(cur or {})
+    merged.update(values)
+    token = _OVERRIDES.set(merged)
+    try:
+        yield
+    finally:
+        _OVERRIDES.reset(token)
+
+
+def override_signature() -> tuple:
+    """Khoá cho bộ nhớ đệm phụ thuộc tham số: () khi không có ghi đè."""
+    ov = _OVERRIDES.get()
+    return tuple(sorted(ov.items())) if ov else ()

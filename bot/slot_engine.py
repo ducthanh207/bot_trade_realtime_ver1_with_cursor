@@ -30,17 +30,16 @@ from strategy import (
     compute_exit_candidates,
     pick_best_exit,
 )
-from strategy.strategies.registry import uses_pct_change_bands, METHOD_3, METHOD_4, METHOD_5
 from strategy.indicators import add_indicators_m3
-from strategy.risk import m3_adx_zone, m3_streak_multiplier, m3_atr_multiplier, m4_adx_zone
-from strategy.signals import m4_entry_1h_confirm, m4_entry_rsi_extreme_block
+from strategy.risk import m3_atr_multiplier
 from strategy.pct_change_avg import build_pct_change_avg_bands_series
-from strategy.regime import classify_regime, m4_regime_entry_decision, m4_apply_regime_to_payload
-from strategy.daily_cycle import daily_cycle_info, m5_entry_decision, m5_apply_cycle_to_payload
-
-# Các phương pháp dùng chung khung PP3/PP4 (circuit breaker, ADX/EMA50/swing/streak). PP5 = PP4 + chu kỳ ngày.
-_M3_FAMILY = (METHOD_3, METHOD_4, METHOD_5)
-_M4_FAMILY = (METHOD_4, METHOD_5)
+from strategy.regime import classify_regime
+from strategy.daily_cycle import daily_cycle_info
+from strategy.cvd import has_taker, last_ratio, resample_4h
+# [2026-11-21] Mỗi phương pháp là một "đĩa" (strategy/disks.py): khung pp1..pp4 + các khối bật thêm.
+# Quyết định vào lệnh dùng chung với backtest: strategy/entry_engine.py.
+from strategy.disks import get_disk
+from strategy.entry_engine import plan_entry, apply_entry_extras
 
 _tz_app = getattr(settings, "GMT7", timezone.utc)
 
@@ -126,7 +125,6 @@ class MarketContext:
         self.df_4h_raw = df_4h_raw
         # [2026-11-07] nến 1D cho PP5 (có thể gồm nến ngày đang chạy — daily_info() tự bỏ). None → PP5 không vào lệnh.
         self.df_1d = df_1d
-        self._daily = None
         self.df_1m = df_1m
         self.df_1h = df_1h
         self.df_4h = add_indicators(df_4h_raw)
@@ -134,7 +132,9 @@ class MarketContext:
         self._row_m3 = None
         self._row_m3_done = False
         self._df_4h_m3_closed = None  # [2026-11-01] nến 4H đã đóng + indicator M3, dùng cho classify_regime
-        self._regime = None
+        self._regime = {}
+        self._cvd = {}
+        self._daily = {}
 
     @property
     def ok(self) -> bool:
@@ -179,27 +179,60 @@ class MarketContext:
 
     def daily_info(self) -> dict:
         """[2026-11-07] Chu kỳ nến ngày cho PP5 — chỉ dùng nến 1D đã đóng, tính một lần mỗi vòng."""
-        if self._daily is None:
+        key = settings.override_signature()  # tham số riêng của đĩa (nếu có) → bộ nhớ đệm riêng
+        if key not in self._daily:
             df = self.df_1d
             if df is not None and not df.empty:
                 now = self.df_1m.index[-1] if self.df_1m is not None and not self.df_1m.empty else self.ts_4h
                 df = df[df.index + pd.Timedelta(days=1) <= pd.Timestamp(now)]
-            self._daily = daily_cycle_info(df)
-        return self._daily
+            self._daily[key] = daily_cycle_info(df)
+        return self._daily[key]
+
+    def cvd_info(self) -> dict:
+        """[2026-11-14] Độ dốc CVD (PP6/PP6.1) trên nến 4H/1H đã đóng; cần cột taker_buy, thiếu → giá trị None."""
+        key = settings.override_signature()
+        if key not in self._cvd:
+            r4 = r1 = rs = None
+            closed_4h = self.df_4h_raw.iloc[:-1] if has_taker(self.df_4h_raw) else None
+            if closed_4h is None and has_taker(self.df_1h):
+                closed_4h = resample_4h(self.df_1h.iloc[:-1])
+            if closed_4h is not None:
+                r4 = last_ratio(closed_4h, settings.M6_4H_BARS)
+                rs = last_ratio(closed_4h, settings.M61_SIDE_CVD_BARS)
+            if has_taker(self.df_1h):
+                r1 = last_ratio(self.df_1h.iloc[:-1], settings.M6_1H_BARS)
+            self._cvd[key] = {"r4": r4, "r1": r1, "r_side": rs}
+        return self._cvd[key]
 
     def regime_info(self) -> dict:
         """[2026-11-01] Giai đoạn thị trường (UP/DOWN/RANGE) trên nến 4H đã đóng — tính một lần mỗi vòng."""
-        if self._regime is None:
+        key = settings.override_signature()
+        if key not in self._regime:
             self.row_m3()
-            self._regime = classify_regime(self._df_4h_m3_closed)
-        return self._regime
+            self._regime[key] = classify_regime(self._df_4h_m3_closed)
+        return self._regime[key]
+
+    def ema_ref(self):
+        """[2026-11-21] PP7: EMA50 của M7_TREND_SLOPE_BARS nến 4H trước nến vừa đóng (None nếu tắt / thiếu)."""
+        n = int(getattr(settings, "M7_TREND_SLOPE_BARS", 0) or 0)
+        self.row_m3()
+        m3 = self._df_4h_m3_closed
+        if n <= 0 or m3 is None or "EMA_TREND" not in m3 or len(m3) <= n:
+            return None
+        return _f(m3["EMA_TREND"].iloc[-1 - n])
 
 
 def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
     """
     Chạy một bước cho slot: xét thoát lệnh đang mở, rồi (nếu không có lệnh) xét vào lệnh.
-    Trả "closed" / "opened" / None.
+    Trả "closed" / "opened" / None. Tham số riêng của đĩa (nếu có) chỉ có hiệu lực trong bước này.
     """
+    disk = get_disk(method)
+    with disk.applied():
+        return _step_slot(slot_id, method, disk, api, mkt)
+
+
+def _step_slot(slot_id, method: str, disk, api: dict, mkt: MarketContext):
     st = api["get_status"]()
     if st == "stopped":
         return None
@@ -294,7 +327,7 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
             api["set_last"](closed)
             api["append_trade"](closed)
             api["set_balance"](capital_after)
-            if cb and method in _M3_FAMILY:
+            if cb and disk.m3:
                 try:
                     update_circuit_breaker(cb, best_pnl, capital_after)
                 except Exception:
@@ -308,8 +341,8 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
     if open_trade or st != "running" or not in_4h_window:
         return None
 
-    # Method 3/4/5: check circuit breaker before any entry
-    if method in _M3_FAMILY:
+    # Khung PP3/PP4: circuit breaker trước mọi lệnh
+    if disk.m3:
         cbd = cb or {}
         now_utc = datetime.now(timezone.utc)
         heavy_until = cbd.get("get_heavy", lambda: None)()
@@ -319,99 +352,19 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
         if light_until and now_utc < light_until:
             return None
 
-    # For Method 3/4, use extended indicators with ADX/EMA_TREND/swing
-    row_m3 = mkt.row_m3() if method in _M3_FAMILY else None
-
-    sig_long = long_entry(prev_row_closed, row_closed)
-    sig_short = short_entry(prev_row_closed, row_closed)
-    if not (sig_long or sig_short):
-        return None
-    side = "LONG" if sig_long else "SHORT"
-
-    # Method 4 entry filters: chặn RSI extreme + cần xác nhận hướng RSI 1H
-    if method in _M4_FAMILY:
-        if m4_entry_rsi_extreme_block(side, row_closed.get("RSI")):
-            return None
-        if getattr(settings, "M4_REQUIRE_1H_CONFIRM", True) and not m4_entry_1h_confirm(side, df_1h):
-            return None
-
-    # [2026-11-01] PP4: nhận diện giai đoạn (mặc định tắt). RANGE / ngược trend → bỏ lệnh hoặc đánh dấu lệnh "chặt"
-    m4_regime, m4_tight = {}, False
-    if method == METHOD_4 and getattr(settings, "M4_REGIME_ENABLED", False):
-        m4_regime = mkt.regime_info()
-        allow_regime, m4_tight = m4_regime_entry_decision(side, m4_regime.get("regime"))
-        if not allow_regime:
-            return None
-
-    # [2026-11-07] PP5: lọc chu kỳ nến ngày — chỉ vào phía cho phép; đi ngang → lệnh "nới"
-    m5_info, m5_wide = {}, False
-    if method == METHOD_5:
-        m5_info = mkt.daily_info()
-        allow_cycle, m5_wide = m5_entry_decision(side, m5_info.get("cycle"))
-        if not allow_cycle:
-            return None
-
-    # Method 3/4 entry filters
-    m3_size_mult = 1.0
-    if method in _M3_FAMILY and row_m3 is not None:
-        # ADX zone filter (M4 thêm exhaustion: ADX quá cao → giảm size)
-        adx_val = float(row_m3.get("ADX", 25.0) or 25.0)
-        if method in _M4_FAMILY:
-            allow, adx_size_mult = m4_adx_zone(adx_val)
-        else:
-            allow, adx_size_mult = m3_adx_zone(adx_val)
-        if not allow:
-            return None
-        m3_size_mult = adx_size_mult
-
-        # EMA trend filter (only when ADX > M3_EMA_TREND_ADX_ABOVE)
-        ema_trend_adx_thresh = getattr(settings, "M3_EMA_TREND_ADX_ABOVE", 30.0)
-        if adx_val > ema_trend_adx_thresh:
-            ema_trend_val = float(row_m3.get("EMA_TREND", 0.0) or 0.0)
-            close_val = float(row_m3.get("close", 0.0) or 0.0)
-            if ema_trend_val > 0 and close_val > 0:
-                if side == "LONG" and close_val < ema_trend_val:
-                    return None
-                if side == "SHORT" and close_val > ema_trend_val:
-                    return None
-
-        # Swing structure size adjustment
-        disagree_size = getattr(settings, "M3_SWING_DISAGREE_SIZE", 0.6)
-        higher_low = bool(row_m3.get("higher_low", False))
-        lower_high = bool(row_m3.get("lower_high", False))
-        if side == "LONG" and lower_high and not higher_low:
-            m3_size_mult = min(m3_size_mult, disagree_size)
-        elif side == "SHORT" and higher_low and not lower_high:
-            m3_size_mult = min(m3_size_mult, disagree_size)
-
-        # Streak multiplier
-        streak_mult = m3_streak_multiplier((cb or {}).get("get_losses", lambda: 0)())
-        m3_size_mult = m3_size_mult * streak_mult
-    if method == METHOD_5 and m5_wide:
-        m3_size_mult = m3_size_mult * float(settings.M5_WIDE_SIZE_MULT)
-
     entry_px = float(df_1m["close"].iloc[-1]) if not df_1m.empty else float(row_closed["close"])
-    lev = api["get_lev"]()
-    wct = api["get_wct"]()
-    size, margin, notional = size_and_margin(balance, entry_px, leverage=lev, wallet_pct=wct)
-    if method in _M3_FAMILY and m3_size_mult < 1.0:
-        size = size * m3_size_mult
-        margin = margin * m3_size_mult
-        notional = notional * m3_size_mult
-    if size <= 0 or margin > balance:
-        return None
-
-    # ATR multiplier (Method 3/4 dùng grace lúc mở; M4 tự siết sau M4_ATR_GRACE_HOURS trong check_atr_trailing)
-    atr_now = atr_1h_at_entry(df_1h, float(row_closed["ATR"]))
     entry_time_now = datetime.now(_tz_app)
-    if method == METHOD_3:
-        atr_mult_now = m3_atr_multiplier(entry_time_now)
-    elif method in _M4_FAMILY:
-        atr_mult_now = settings.M4_ATR_MULTIPLIER_GRACE
-    else:
-        atr_mult_now = settings.ATR_MULTIPLIER
-    trail_dist = atr_now * atr_mult_now
-    init_stop = entry_px - trail_dist if side == "LONG" else entry_px + trail_dist
+    plan = plan_entry(
+        disk, prev_row_closed=prev_row_closed, row_closed=row_closed, get_row_m3=mkt.row_m3, df_1h=df_1h,
+        get_regime=mkt.regime_info, get_daily=mkt.daily_info, get_cvd=mkt.cvd_info, get_ema_ref=mkt.ema_ref,
+        losses=(cb or {}).get("get_losses", lambda: 0)(), balance=balance, entry_px=entry_px,
+        leverage=api["get_lev"](), wallet_pct=api["get_wct"](),
+        m3_grace_mult=m3_atr_multiplier(entry_time_now) if disk.pp3_only else 0.0,
+    )
+    if plan is None:
+        return None
+    side, size = plan["side"], plan["size"]
+    margin, notional, atr_now, init_stop = plan["margin"], plan["notional"], plan["atr"], plan["init_stop"]
 
     entry_4h_ts = df_4h.index[-2]
     open_payload = {
@@ -432,20 +385,9 @@ def step_slot(slot_id, method: str, api: dict, mkt: MarketContext):
         "trading_method": method,
         "paper_slot": slot_id,
     }
-    if method == METHOD_3:
-        open_payload["atr_multiplier_override"] = atr_mult_now
-    elif method == METHOD_4:
-        open_payload["atr_multiplier_override"] = atr_mult_now
-        open_payload["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
-        # [2026-11-01] lưu giai đoạn + đỉnh/đáy nến tín hiệu; lệnh "chặt" đổi hệ số ATR và stop ban đầu
-        if getattr(settings, "M4_REGIME_ENABLED", False) or getattr(settings, "M4_INVALIDATION_EXIT", False):
-            m4_apply_regime_to_payload(open_payload, side, m4_regime, m4_tight, row_closed)
-    elif method == METHOD_5:
-        open_payload["atr_multiplier_override"] = atr_mult_now
-        open_payload["max_stop_capital_pct"] = settings.M4_MAX_STOP_CAPITAL_PCT
-        m5_apply_cycle_to_payload(open_payload, side, m5_info, m5_wide)
+    apply_entry_extras(disk, open_payload, plan, row_closed)
     # Chỉ phương pháp dùng %change (PP2) mới snapshot dải — PP1/PP3 không đụng pct_change
-    if uses_pct_change_bands(method):
+    if disk.pp2:
         bands_at_entry = build_pct_change_avg_bands_series(df_4h_raw, lookback_trades=lb_trades)
         open_payload["pct_half_width_pct"] = bands_at_entry.get("band_half_width_pct")
         open_payload["pct_upper_at_entry"] = bands_at_entry.get("upper")

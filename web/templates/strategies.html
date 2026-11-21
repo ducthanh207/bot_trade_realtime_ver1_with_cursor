@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Chiến lược – kho đĩa{% endblock %}
+{% block content %}
+{# [2026-11-21] Hộp và đĩa: mỗi chiến lược là một đĩa .md (chỉ khai báo, không chứa code) #}
+<main class="pg" id="dkPage" data-csrf="{{ csrf }}" data-admin="{{ 1 if is_admin else 0 }}">
+  <h1>Chiến lược</h1>
+  <p class="sub">Web + bot là cái <b>hộp</b> dùng chung (dữ liệu, paper, backtest, Telegram). Mỗi chiến lược là một <b>đĩa</b> — file .md
+    khai báo dùng khung nào, bật khối nào, tham số nào. Đĩa không chứa code: hộp kiểm tra từng dòng rồi mới nạp.
+    Đĩa nạp mới chỉ chạy <b>paper</b> và <b>backtest</b>; muốn trade thật vẫn phải chọn ở trang Trade thật.</p>
+
+  {% if not is_admin %}
+  <div class="notice" style="margin-bottom:12px">Đang xem ở chế độ chỉ đọc.
+    <a href="/live/login?next=/strategies">Đăng nhập admin</a> để nạp đĩa và bật/tắt paper.</div>
+  {% endif %}
+  <div id="loadErr"></div>
+
+  {% if is_admin %}
+  <section class="card" style="margin-bottom:12px">
+    <h2>Nạp đĩa mới</h2>
+    <div class="row">
+      <input type="file" id="upFile" accept=".md,text/markdown,text/plain">
+      <button class="btn" type="button" id="btnPaste">Hoặc dán nội dung</button>
+    </div>
+    <textarea id="upText" rows="10" style="display:none; margin-top:8px" placeholder="---&#10;disk: 1&#10;id: pp7-risk1&#10;name: ...&#10;base: pp4&#10;---"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" type="button" id="btnCheck">Kiểm tra</button>
+      <button class="btn primary" type="button" id="btnUpload" disabled>Nạp đĩa</button>
+      <span id="upMsg" class="muted"></span>
+    </div>
+    <div id="upPreview" style="margin-top:10px"></div>
+  </section>
+  {% endif %}
+
+  <div class="grid-cards" id="diskGrid"></div>
+</main>
+
+<div class="drawer" id="dkDrawer" role="dialog" aria-modal="true">
+  <div class="box">
+    <div class="head"><h3 id="dkTitle"></h3>
+      <a class="btn sm" id="dkMd" href="#">Tải .md</a>
+      <a class="btn sm" id="dkBt" href="#">Backtest</a>
+      <button class="btn sm" id="dkClose" type="button">Đóng</button></div>
+    <div id="dkMeta"></div>
+    <div id="dkPaper"></div>
+    <div class="md-body" id="dkBody" style="margin-top:10px"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/bt_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/strategies.js') }}"></script>
+{% endblock %}

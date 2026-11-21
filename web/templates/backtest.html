@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Backtest – chọn chiến lược, coin, thời gian{% endblock %}
+{% block content %}
+{# [2026-11-21] Trang backtest riêng: mọi đĩa chiến lược, nhiều cặp, lưu kết quả, xuất Excel #}
+<main class="pg" id="btPage" data-csrf="{{ csrf }}" data-admin="{{ 1 if is_admin else 0 }}">
+  <h1>Backtest</h1>
+  <p class="sub">Phát lại từng phút đúng logic bot (chỉ dùng nến đã đóng). Nến đã tải được giữ lại trên máy chủ, nên chạy lại cùng
+    khoảng ngày rất nhanh. Mọi kết quả được lưu ở "Lịch sử" để xem lại hoặc tải Excel. Chỉ là mô phỏng, không đặt lệnh.</p>
+
+  <section class="card">
+    <h2>Chạy backtest mới</h2>
+    <div class="bt-form">
+      <label class="field wide"><span>Chiến lược (đĩa)</span><select id="fDisk"></select></label>
+      <div class="field wide"><span>Cặp coin (chọn nhanh hoặc gõ, cách nhau bằng dấu phẩy — tối đa 10)</span>
+        <div class="chips" id="symChips"></div>
+        <input type="text" id="fSymbols" value="{{ default_symbol }}" placeholder="BTCUSDT, ETHUSDT" autocomplete="off" autocapitalize="characters">
+      </div>
+      <label class="field"><span>Từ ngày</span><input type="date" id="fStart"></label>
+      <label class="field"><span>Đến ngày</span><input type="date" id="fEnd"></label>
+      <div class="field wide"><span>Khoảng nhanh</span><div class="chips" id="rangeChips"></div></div>
+      <label class="field"><span>Vốn ban đầu (USDT)</span><input type="number" id="fCapital" value="1000" min="1" step="1"></label>
+      <label class="field"><span>Đòn bẩy</span><input type="number" id="fLev" value="{{ '%g' % default_lev }}" min="1" max="125" step="1"></label>
+      <label class="field"><span>% vốn mỗi lệnh</span><input type="number" id="fWct" value="{{ '%g' % default_wct }}" min="1" max="100" step="1"></label>
+      <details class="field wide"><summary class="muted" style="cursor:pointer">Tham số thử (tuỳ chọn, chỉ cho lần chạy này)</summary>
+        <textarea id="fParams" rows="3" placeholder="Mỗi dòng TÊN=giá trị, ví dụ:&#10;M7_RISK_PCT=0.01&#10;M6_EXIT_MODE=close"></textarea>
+        <span class="muted">Tên giống .env. Không ghi gì = dùng tham số của đĩa / .env. <a href="/api/disks/schema" target="_blank">Danh sách tham số</a></span>
+      </details>
+      <div class="field wide row"><button class="btn primary" id="btnRun" type="button">Chạy backtest</button><span id="runMsg" class="muted"></span></div>
+    </div>
+  </section>
+
+  <section class="card" id="runningCard" style="margin-top:12px; display:none">
+    <h2>Đang chạy</h2><div id="runningList" class="muted"></div>
+  </section>
+
+  <section class="card" style="margin-top:12px">
+    <div class="row" style="justify-content:space-between"><h2 style="margin:0">Lịch sử backtest</h2>
+      <label class="row muted">Lọc <select id="fFilter"><option value="">Tất cả chiến lược</option></select></label></div>
+    <div class="tbl-wrap" style="margin-top:8px"><table class="tbl" id="histTbl"></table></div>
+    <p class="muted" id="histEmpty" style="display:none">Chưa có kết quả nào. Chạy một backtest ở trên.</p>
+  </section>
+
+  <section class="card" style="margin-top:12px">
+    <h2>Nến đã tải sẵn</h2>
+    <p class="muted" style="margin-top:0">Lưu ở backtest/data_cache trên máy chủ; lần sau chỉ tải phần còn thiếu.</p>
+    <div class="tbl-wrap"><table class="tbl" id="cacheTbl"></table></div>
+  </section>
+</main>
+
+<div class="drawer" id="resDrawer" role="dialog" aria-modal="true">
+  <div class="box">
+    <div class="head"><h3 id="resTitle">Kết quả</h3>
+      <a class="btn ok sm" id="resXlsx" href="#">Tải Excel</a>
+      <button class="btn danger sm" id="resDel" type="button" style="display:none">Xoá</button>
+      <button class="btn sm" id="resClose" type="button">Đóng</button></div>
+    <div class="muted" id="resSub"></div>
+    <div class="stat-grid" id="resStats"></div>
+    <div class="eq-wrap"><canvas id="resChart"></canvas><div class="eq-tip" id="resTip"></div></div>
+    <div class="muted" id="resReasons" style="margin:8px 0"></div>
+    <div id="resTrades"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/bt_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/backtest_page.js') }}"></script>
+{% endblock %}

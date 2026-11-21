@@ -6,6 +6,9 @@ METHOD_2 = "2"
 METHOD_3 = "3"
 METHOD_4 = "4"
 METHOD_5 = "5"  # [2026-11-07] PP4 + lọc chu kỳ nến ngày (Paper 5, /live, backtest)
+METHOD_6 = "6"  # [2026-11-14] PP4 + CVD 4H/1H (chỉ backtest)
+METHOD_61 = "6.1"  # [2026-11-14] PP5 + CVD 4H/1H (chỉ backtest)
+METHOD_7 = "7"  # [2026-11-20] PP4 + size theo rủi ro + lọc trend + stop 4H (chỉ backtest)
 
 _LABELS = {
     METHOD_1: "Phương pháp 1 — thoát cổ điển (4H + early + ATR trail + SL)",
@@ -13,6 +16,9 @@ _LABELS = {
     METHOD_3: "Phương pháp 3 — Exit B (tầng mạnh: RSI slope) + EMA filter ADX>30 + Circuit breaker",
     METHOD_4: "Phương pháp 4 — nâng cấp PP3: Exit B thay early, hard stop % vốn, xác nhận RSI 1H, filter RSI extreme + ADX exhaustion",
     METHOD_5: "Phương pháp 5 — PP4 + lọc chu kỳ nến ngày (EMA + %change): tăng chỉ LONG, giảm chỉ SHORT, đi ngang thì thoát nới",
+    METHOD_6: "Phương pháp 6 — PP4 + CVD: CVD 4H xác nhận hướng vào lệnh, CVD 1H đi ngược thì siết trailing",
+    METHOD_61: "Phương pháp 6.1 — PP5 + CVD: chu kỳ ngày chọn hướng, CVD 4H xác nhận, CVD 1H siết trailing, đi ngang chọn phía theo CVD",
+    METHOD_7: "Phương pháp 7 — PP4 + size theo rủi ro (mất cố định % vốn mỗi lệnh) + lọc trend EMA50 luôn bật + stop/trailing theo ATR 4H",
 }
 
 
@@ -36,7 +42,16 @@ def get_trading_method() -> str:
 
 def get_method_label(method: str = None) -> str:
     m = method if method is not None else get_trading_method()
-    return _LABELS.get(m, _LABELS[METHOD_1])
+    if m in _LABELS:
+        return _LABELS[m]
+    try:  # [2026-11-21] đĩa nạp từ web: tên trong đĩa
+        from strategy.disks import find_disk
+        d = find_disk(m)
+        if d is not None:
+            return f"Đĩa {d.label} — {d.name}"
+    except Exception:
+        pass
+    return _LABELS[METHOD_1]
 
 
 def uses_pct_change_bands(method: str) -> bool:
@@ -71,5 +86,21 @@ def describe_method(method: str = None) -> str:
             "Tăng (2 nến đóng trên EMA hoặc đột biến %change) → chỉ LONG; giảm → chỉ SHORT; "
             "đi ngang (3 nến sát EMA trong X = k×ATR ngày) → vào theo phía nến đóng gần nhất, "
             "trailing nới + giảm size + chốt lời dải %change + Exit B đã sửa."
+        )
+    if m == METHOD_6:
+        return (
+            "Phương pháp 6 (PP4 + CVD): giữ toàn bộ PP4; chỉ vào khi độ dốc CVD 4H (6 nến) cùng chiều lệnh; "
+            "khi CVD 1H (8 nến) đi ngược lệnh 2 giờ liền thì siết trailing về 1.5 ATR."
+        )
+    if m == METHOD_61:
+        return (
+            "Phương pháp 6.1 (PP5 + CVD): giữ toàn bộ PP5; thêm xác nhận CVD 4H và siết trailing theo CVD 1H như PP6; "
+            "chu kỳ ngày đi ngang thì chọn phía theo độ dốc CVD 4H 2 ngày thay cho nến đóng gần nhất."
+        )
+    if m == METHOD_7:
+        return (
+            "Phương pháp 7 (PP4 + 3 sửa đổi chống sụt vốn): size theo rủi ro — mỗi lệnh chạm stop chỉ mất M7_RISK_PCT vốn; "
+            "LONG chỉ khi giá đóng 4H trên EMA50, SHORT khi dưới (bất kể ADX); stop và trailing = M7_ATR4H_MULT × ATR 4H, "
+            "không siết sau 12h. Các lọc vào lệnh, circuit breaker và 4H_EXIT giữ như PP4. Chỉ chạy trong backtest."
         )
     return "Phương pháp 1: thoát khi tín hiệu 4H / early / ATR trailing / thanh lý / trần lỗ như code gốc."

@@ -67,18 +67,28 @@ def check_atr_trailing(open_trade: dict, row_1m: pd.Series):
     atr = open_trade["atr"]
     high = row_1m["high"]
     low = row_1m["low"]
-    if str(open_trade.get("trading_method", "")) == "4":
-        # M4: grace hết hạn theo thời gian nến đang xét (không dùng override cố định lúc mở lệnh)
-        # [2026-11-01] qua m4_trailing_multiplier: thêm lệnh "chặt" (regime) và grace mượt (M4_SMOOTH_GRACE).
-        # Khi các tùy chọn mới đều tắt, kết quả y hệt _m4_mult_at cũ.
-        from strategy.regime import m4_trailing_multiplier
-        mult = m4_trailing_multiplier(open_trade, getattr(row_1m, "name", None))
-    elif str(open_trade.get("trading_method", "")) == "5":
-        # [2026-11-07] PP5: như PP4 gốc; lệnh vào lúc đi ngang dùng hệ số nới cố định
+    # [2026-11-21] Hệ số trailing theo khối của đĩa chiến lược (strategy/disks.py) — giữ đúng kết quả cũ:
+    # PP7 (stop_atr_4h) cố định; PP5/PP6.1 (daily_cycle) theo m5; PP4 (regime_cut) theo m4_trailing_multiplier;
+    # PP6 (khung pp4) grace 2.5 trong 12h rồi 2.2; PP1–PP3 hệ số lúc mở. Khối cvd siết thêm khi CVD 1H ngược lệnh.
+    from strategy.disks import get_disk
+    disk = get_disk(open_trade.get("trading_method", ""))
+    now_ts = getattr(row_1m, "name", None)
+    if disk.stop4h:
+        # open_trade["atr"] là ATR nến 4H lúc vào lệnh (không refresh theo 1H), hệ số cố định
+        mult = settings.M7_ATR4H_MULT
+    elif disk.daily:
         from strategy.daily_cycle import m5_trailing_multiplier
-        mult = m5_trailing_multiplier(open_trade, getattr(row_1m, "name", None))
+        mult = m5_trailing_multiplier(open_trade, now_ts)
+    elif disk.regime:
+        from strategy.regime import m4_trailing_multiplier
+        mult = m4_trailing_multiplier(open_trade, now_ts)
+    elif disk.m4:
+        mult = _m4_mult_at(open_trade.get("entry_time"), now_ts)
     else:
         mult = open_trade.get("atr_multiplier_override") or settings.ATR_MULTIPLIER
+    if disk.cvd:
+        from strategy.cvd import cvd_trailing_multiplier
+        mult = cvd_trailing_multiplier(open_trade, mult)
     trail_dist = atr * mult
 
     if side == "LONG":

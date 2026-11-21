@@ -125,8 +125,9 @@ def rig(live, monkeypatch):
     sb, store, engine = live
     import bot.slot_engine as se
     sig = {"long": False, "exit": None}
-    monkeypatch.setattr(se, "long_entry", lambda p, r: sig["long"])
-    monkeypatch.setattr(se, "short_entry", lambda p, r: False)
+    import strategy.entry_engine as ee  # [2026-11-21] tín hiệu vào lệnh nằm ở entry_engine (dùng chung backtest)
+    monkeypatch.setattr(ee, "long_entry", lambda p, r: sig["long"])
+    monkeypatch.setattr(ee, "short_entry", lambda p, r: False)
     real_cec = se.compute_exit_candidates
 
     def fake_cec(open_trade, df_1m, *a, **k):
@@ -327,12 +328,13 @@ def _daily(trend: float, days=300):
 
 @pytest.mark.parametrize("trend,opens", [(0.01, True), (-0.01, False)])
 def test_pp5_bot_follows_daily_cycle(live, monkeypatch, trend, opens):
+    import strategy.entry_engine as ee
     sb, store, engine = live
     import bot.slot_engine as se
-    monkeypatch.setattr(se, "long_entry", lambda p, r: True)
-    monkeypatch.setattr(se, "short_entry", lambda p, r: False)
-    monkeypatch.setattr(se, "m4_entry_1h_confirm", lambda side, df: True)
-    monkeypatch.setattr(se, "m4_entry_rsi_extreme_block", lambda side, rsi: False)
+    monkeypatch.setattr(ee, "long_entry", lambda p, r: True)
+    monkeypatch.setattr(ee, "short_entry", lambda p, r: False)
+    monkeypatch.setattr(ee, "m4_entry_1h_confirm", lambda side, df: True)
+    monkeypatch.setattr(ee, "m4_entry_rsi_extreme_block", lambda side, rsi: False)
     monkeypatch.setattr(se, "compute_exit_candidates", lambda *a, **k: [])
     monkeypatch.setattr(engine, "is_4h_boundary_window", lambda: True)
     trader, market = FakeTrader(), FakeMarket()

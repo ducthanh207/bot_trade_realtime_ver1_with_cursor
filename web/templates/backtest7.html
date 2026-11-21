@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Backtest PP7 – PP4 + size theo rủi ro + lọc trend + stop 4H{% endblock %}
+{% block content %}
+{# [2026-11-20] PP7 chỉ chạy backtest. Đòn bẩy / % vốn lấy theo quy tắc vốn của Paper 4 (là mức trần notional của PP7). #}
+<section class="paper-layout" role="main">
+  <p style="color:#aaa; font-size:0.85em; margin:4px 0;">
+    PP7 = PP4 + mỗi lệnh chạm stop chỉ mất {{ '%g' % (risk_pct * 100) }}% vốn,
+    LONG chỉ khi giá trên EMA50 4H / SHORT khi dưới, stop và trailing = {{ '%g' % atr_mult }} × ATR nến 4H. Chỉ là backtest, không đặt lệnh.
+  </p>
+  {% with bt_slot=7, bt_api="/api/pp7" %}{% include "_backtest_panel.html" %}{% endwith %}
+</section>
+{% endblock %}

@@ -152,3 +152,25 @@ def test_pp5_wide_path_strict(cfg):
     assert real, "cần ít nhất 1 lệnh PP5 để kiểm tra"
     for tr in real:
         assert tr["cycle"] in C.SIDEWAYS and tr["cycle_wide"] is True
+
+
+def test_m5_entry_plan_counter_trend(monkeypatch):
+    """[2026-11-08] Lệnh ngược chu kỳ: mặc định chặn; hệ số > 0 thì cho vào với size nhỏ."""
+    from config import settings
+    from strategy.daily_cycle import (CYCLE_DOWN, CYCLE_NEUTRAL, CYCLE_SIDE_LONG, CYCLE_SIDE_SHORT, CYCLE_UP,
+                                      m5_entry_plan)
+
+    monkeypatch.setattr(settings, "M5_COUNTER_LONG_SIZE", 0.0)
+    monkeypatch.setattr(settings, "M5_COUNTER_SHORT_SIZE", 0.0)
+    assert m5_entry_plan("LONG", CYCLE_DOWN) == (False, False, 1.0, False)
+    assert m5_entry_plan("LONG", CYCLE_UP) == (True, False, 1.0, False)
+    assert m5_entry_plan("SHORT", CYCLE_SIDE_SHORT) == (True, True, 1.0, False)
+    assert m5_entry_plan("SHORT", CYCLE_NEUTRAL) == (True, False, 1.0, False)
+    assert m5_entry_plan("LONG", None) == (False, False, 1.0, False)
+
+    monkeypatch.setattr(settings, "M5_COUNTER_LONG_SIZE", 0.5)
+    assert m5_entry_plan("LONG", CYCLE_DOWN) == (True, False, 0.5, True)
+    assert m5_entry_plan("LONG", CYCLE_SIDE_SHORT) == (True, True, 0.5, True)
+    assert m5_entry_plan("SHORT", CYCLE_UP) == (False, False, 1.0, False)  # SHORT vẫn chặn
+    monkeypatch.setattr(settings, "M5_COUNTER_SHORT_SIZE", 1.0)
+    assert m5_entry_plan("SHORT", CYCLE_SIDE_LONG) == (True, True, 1.0, True)
