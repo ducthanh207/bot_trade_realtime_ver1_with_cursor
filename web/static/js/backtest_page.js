@@ -73,29 +73,134 @@
   });
 
   // ---------- lịch sử ----------
-  var items = [];
+  // [2026-11-22] Lọc (chiến lược, cặp, lãi/lỗ, khoảng ngày, số lệnh, chữ) + bấm tiêu đề cột để sắp xếp.
+  var items = [], restored = false;
   function label(id) { var d = disks.filter(function (x) { return x.id === id; })[0]; return d ? d.short : id; }
+  function d10(v) { return String(v == null ? "" : v).slice(0, 10); }
+  function ovText(x) { return Object.keys(x.overrides || {}).map(function (k) { return k + "=" + x.overrides[k]; }).join(" "); }
+  function nOrNull(v) { return (v === null || v === undefined || v === "" || isNaN(Number(v))) ? null : Number(v); }
+  // [khoá, tiêu đề, giá trị để sắp xếp, chiều mặc định khi bấm lần đầu]
+  var COLS = [
+    ["saved_at", "Lúc chạy", function (x) { return nOrNull(x.saved_at); }, -1],
+    ["method", "Chiến lược", function (x) { return String(x.label || label(x.method)).toLowerCase(); }, 1],
+    ["symbol", "Cặp", function (x) { return String(x.symbol || ""); }, 1],
+    ["start", "Khoảng ngày", function (x) { return d10(x.start) + d10(x.end); }, -1],
+    ["return_pct", "Lời/lỗ %", function (x) { return nOrNull(x.return_pct); }, -1],
+    ["total_pnl", "Lời/lỗ USDT", function (x) { return nOrNull(x.total_pnl); }, -1],
+    ["max_drawdown_pct", "DD max", function (x) { return nOrNull(x.max_drawdown_pct); }, 1],
+    ["total_trades", "Lệnh", function (x) { return nOrNull(x.total_trades); }, -1],
+    ["winrate", "Winrate", function (x) { return nOrNull(x.winrate); }, -1],
+    ["profit_factor", "Profit factor", function (x) {  // không có lệnh thua mà có lãi → coi như vô cùng
+      var v = nOrNull(x.profit_factor); return v === null && Number(x.return_pct) > 0 && x.max_loss_streak === 0 ? Infinity : v; }, -1],
+    ["max_loss_streak", "Chuỗi thua", function (x) { return nOrNull(x.max_loss_streak); }, 1],
+    ["overrides", "Tham số thử", function (x) { return ovText(x); }, 1]
+  ];
+  var SKEY = "bt_hist_view";
+  var view = {sort: "saved_at", dir: -1};
+  var FIELDS = ["fFilter", "hSym", "hRes", "hRange", "hFrom", "hTo", "hMinTr", "hText"];
+  try { var sv = JSON.parse(localStorage.getItem(SKEY) || "null"); if (sv && sv.sort) view = sv; } catch (e) {}
+  function saveView() {
+    view.f = {}; FIELDS.forEach(function (k) { view.f[k] = $(k).value; });
+    try { localStorage.setItem(SKEY, JSON.stringify(view)); } catch (e) {}
+  }
+  function col(k) { return COLS.filter(function (c) { return c[0] === k; })[0] || COLS[0]; }
+  var NARROW = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+  if (NARROW) $("histBox").open = false;  // điện thoại: thu gọn bộ lọc, bấm để mở
+  function runAt(t) {
+    var d = new Date(t * 1000);
+    return NARROW ? d.toLocaleString("vi-VN", {hour12: false, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"})
+      : d.toLocaleString("vi-VN", {hour12: false});
+  }
+  $("hSort").innerHTML = COLS.map(function (c) { return "<option value='" + c[0] + "'>" + esc(c[1]) + "</option>"; }).join("");
+
+  function fillSelect(id, first, vals) {  // giữ lựa chọn hiện tại nếu còn
+    var el = $(id), cur = el.value;
+    el.innerHTML = "<option value=''>" + esc(first) + "</option>" + vals.map(function (v) {
+      return "<option value='" + esc(v[0]) + "'>" + esc(v[1]) + "</option>"; }).join("");
+    if (cur && vals.some(function (v) { return v[0] === cur; })) el.value = cur;
+  }
+  function uniq(a) { return a.filter(function (v, i) { return v && a.indexOf(v) === i; }); }
+  function fillOptions() {
+    fillSelect("hSym", "Tất cả cặp", uniq(items.map(function (x) { return x.symbol; })).sort().map(function (v) { return [v, v]; }));
+    fillSelect("hRange", "Mọi khoảng ngày", uniq(items.map(function (x) { return d10(x.start) + "|" + d10(x.end); })).sort().reverse()
+      .map(function (v) { var p = v.split("|"); return [v, p[0] + " → " + p[1]]; }));
+  }
+
+  function filtered() {
+    var f = $("fFilter").value, sym = $("hSym").value, res = $("hRes").value, rg = $("hRange").value;
+    var from = $("hFrom").value, to = $("hTo").value, minTr = parseInt($("hMinTr").value, 10) || 0;
+    var q = $("hText").value.trim().toLowerCase();
+    return items.filter(function (x) {
+      var r = Number(x.return_pct || 0);
+      if (f && x.method !== f) return false;
+      if (sym && x.symbol !== sym) return false;
+      if (res === "win" && !(r > 0)) return false;
+      if (res === "loss" && !(r < 0)) return false;
+      if (rg && d10(x.start) + "|" + d10(x.end) !== rg) return false;
+      if (from && d10(x.start) < from) return false;  // khoảng backtest nằm trong [từ, đến]
+      if (to && d10(x.end) > to) return false;
+      if (minTr && !(Number(x.total_trades || 0) >= minTr)) return false;
+      if (q && [x.label, label(x.method), x.disk_name, x.symbol, ovText(x), x.batch].join(" ").toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+  function sorted(rows) {
+    var get = col(view.sort)[2], dir = view.dir;
+    return rows.map(function (x, i) { return {x: x, v: get(x), i: i}; }).sort(function (a, b) {
+      if (a.v === null && b.v === null) return a.i - b.i;
+      if (a.v === null) return 1;  // ô trống luôn nằm cuối
+      if (b.v === null) return -1;
+      var c = typeof a.v === "string" ? a.v.localeCompare(b.v) : (a.v < b.v ? -1 : a.v > b.v ? 1 : 0);
+      return c ? c * dir : a.i - b.i;
+    }).map(function (o) { return o.x; });
+  }
+
   function drawHist() {
-    var f = $("fFilter").value;
-    var rows = items.filter(function (x) { return !f || x.method === f; });
+    var rows = sorted(filtered());
+    $("hSort").value = view.sort;
+    $("hDir").textContent = view.dir < 0 ? "↓ Giảm dần" : "↑ Tăng dần";
+    var nf = FIELDS.filter(function (k) { return $(k).value; }).length;
+    $("histActive").textContent = nf ? "(đang lọc " + nf + " điều kiện)" : "";
+    $("histCount").textContent = items.length ? rows.length + " / " + items.length + " kết quả" : "";
+    $("histEmpty").textContent = items.length ? "Không có kết quả nào khớp bộ lọc." : "Chưa có kết quả nào. Chạy một backtest ở trên.";
     $("histEmpty").style.display = rows.length ? "none" : "";
-    $("histTbl").innerHTML = rows.length ? "<tr><th>Lúc chạy</th><th>Chiến lược</th><th>Cặp</th><th>Khoảng ngày</th><th>Lời/lỗ %</th>" +
-      "<th>DD max</th><th>Lệnh</th><th>Winrate</th><th>Tham số thử</th></tr>" + rows.map(function (x) {
-        var r = Number(x.return_pct || 0), ov = Object.keys(x.overrides || {}).map(function (k) { return k + "=" + x.overrides[k]; }).join(" ");
-        return "<tr class='click' data-id='" + esc(x.id) + "'><td>" + new Date(x.saved_at * 1000).toLocaleString("vi-VN", {hour12: false}) +
-          "</td><td>" + esc(x.label || label(x.method)) + "</td><td>" + esc(x.symbol) + "</td><td>" + esc(String(x.start).slice(0, 10)) + " → " +
-          esc(String(x.end).slice(0, 10)) + "</td><td class='" + (r >= 0 ? "pos" : "neg") + "'>" + V.money(r) + "%</td><td>" + V.num(x.max_drawdown_pct, 1) +
-          "%</td><td>" + esc(x.total_trades) + "</td><td>" + V.num(x.winrate, 1) + "%</td><td class='muted'>" + esc(ov) + "</td></tr>";
+    $("histTbl").innerHTML = rows.length ? "<tr>" + COLS.map(function (c) {
+        var on = c[0] === view.sort;
+        return "<th class='sortable" + (on ? " sorted" : "") + "' data-k='" + c[0] + "' title='Bấm để sắp xếp'>" + esc(c[1]) +
+          "<span class='arr'>" + (on ? (view.dir < 0 ? "▼" : "▲") : "↕") + "</span></th>";
+      }).join("") + "</tr>" + rows.map(function (x) {
+        var r = Number(x.return_pct || 0), pnl = nOrNull(x.total_pnl), pf = nOrNull(x.profit_factor);
+        return "<tr class='click' data-id='" + esc(x.id) + "'><td>" + runAt(x.saved_at) +
+          "</td><td>" + esc(x.label || label(x.method)) + "</td><td>" + esc(x.symbol) + "</td><td>" + esc(d10(x.start)) + " → " +
+          esc(d10(x.end)) + "</td><td class='" + (r >= 0 ? "pos" : "neg") + "'>" + V.money(r) + "%</td><td class='" +
+          (pnl === null ? "" : pnl >= 0 ? "pos" : "neg") + "'>" + (pnl === null ? "—" : V.money(pnl)) + "</td><td>" + V.num(x.max_drawdown_pct, 1) +
+          "%</td><td>" + esc(x.total_trades) + "</td><td>" + V.num(x.winrate, 1) + "%</td><td>" +
+          (pf !== null ? pf.toFixed(2) : (Number(x.return_pct) > 0 && x.max_loss_streak === 0 ? "∞" : "—")) + "</td><td>" +
+          (x.max_loss_streak == null ? "—" : esc(x.max_loss_streak)) + "</td><td class='muted'>" + esc(ovText(x)) + "</td></tr>";
       }).join("") : "";
   }
-  $("fFilter").addEventListener("change", drawHist);
+  function setSort(k, dir) { view.sort = k; view.dir = dir; saveView(); drawHist(); }
+  FIELDS.forEach(function (k) { $(k).addEventListener(k === "hText" || k === "hMinTr" ? "input" : "change", function () { saveView(); drawHist(); }); });
+  $("hSort").addEventListener("change", function () { setSort(this.value, col(this.value)[3]); });
+  $("hDir").addEventListener("click", function () { setSort(view.sort, -view.dir); });
+  $("hClear").addEventListener("click", function () {
+    FIELDS.forEach(function (k) { $(k).value = ""; }); saveView(); drawHist();
+  });
   $("histTbl").addEventListener("click", function (e) {
+    var th = e.target.closest("th.sortable");
+    if (th) { var k = th.dataset.k; setSort(k, k === view.sort ? -view.dir : col(k)[3]); return; }
     var tr = e.target.closest("tr.click"); if (tr) openResult(tr.dataset.id);
   });
+  function restoreFilters() {  // sau khi có danh sách đĩa / cặp mới đặt lại lựa chọn đã lưu
+    var f = view.f || {};
+    FIELDS.forEach(function (k) { if (f[k] != null && f[k] !== "") $(k).value = f[k]; });
+  }
 
   function refresh() {
-    return api("/api/backtests").then(function (d) {
+    return api("/api/backtests?limit=300").then(function (d) {
       items = d.items || [];
+      fillOptions();
+      if (!restored) { restoreFilters(); restored = true; }
       drawHist();
       var run = d.running || [];
       $("runningCard").style.display = run.length ? "" : "none";

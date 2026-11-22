@@ -35,7 +35,24 @@
 
   <section class="card" style="margin-top:12px">
     <div class="row" style="justify-content:space-between"><h2 style="margin:0">Lịch sử backtest</h2>
-      <label class="row muted">Lọc <select id="fFilter"><option value="">Tất cả chiến lược</option></select></label></div>
+      <span class="muted" id="histCount"></span></div>
+    {# [2026-11-22] Bộ lọc + sắp xếp lịch sử (lọc ngay trên trình duyệt, không đổi dữ liệu đã lưu) #}
+    <details class="hist-box" id="histBox" open><summary class="muted">Bộ lọc &amp; sắp xếp <span id="histActive"></span></summary>
+    <div class="hist-filter" id="histFilter">
+      <label class="field"><span>Chiến lược</span><select id="fFilter"><option value="">Tất cả chiến lược</option></select></label>
+      <label class="field"><span>Cặp coin</span><select id="hSym"><option value="">Tất cả cặp</option></select></label>
+      <label class="field"><span>Kết quả</span><select id="hRes">
+        <option value="">Lãi và lỗ</option><option value="win">Chỉ lãi</option><option value="loss">Chỉ lỗ</option></select></label>
+      <label class="field"><span>Khoảng backtest</span><select id="hRange"><option value="">Mọi khoảng ngày</option></select></label>
+      <label class="field"><span>Backtest từ ngày</span><input type="date" id="hFrom"></label>
+      <label class="field"><span>đến ngày</span><input type="date" id="hTo"></label>
+      <label class="field"><span>Lệnh tối thiểu</span><input type="number" id="hMinTr" min="0" step="1" placeholder="0"></label>
+      <label class="field"><span>Tìm (tham số, tên...)</span><input type="text" id="hText" placeholder="vd M7_RISK" autocomplete="off"></label>
+      <label class="field hist-sort-m"><span>Sắp xếp theo</span><select id="hSort"></select></label>
+      <div class="field hist-sort-m"><span>&nbsp;</span><button class="btn" id="hDir" type="button">↓ Giảm dần</button></div>
+      <div class="field"><span>&nbsp;</span><button class="btn" id="hClear" type="button">Xoá lọc</button></div>
+    </div></details>
+    <p class="muted" style="margin:6px 0 0">Bấm vào tiêu đề cột để sắp xếp (bấm lần nữa để đảo chiều). Bấm một dòng để xem chi tiết.</p>
     <div class="tbl-wrap" style="margin-top:8px"><table class="tbl" id="histTbl"></table></div>
     <p class="muted" id="histEmpty" style="display:none">Chưa có kết quả nào. Chạy một backtest ở trên.</p>
   </section>

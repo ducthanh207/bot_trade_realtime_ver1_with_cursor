@@ -39,6 +39,21 @@ def _read_index() -> list:
         return []
 
 
+def trade_metrics(res: dict) -> dict:
+    """[2026-11-22] Profit factor + chuỗi thua dài nhất + lời/lỗ USDT, tính giống popup kết quả (lãi ròng = profit - fee_in)."""
+    net = [float(t.get("profit") or 0) - float(t.get("fee_in") or 0) for t in (res.get("trades") or [])]
+    win = sum(x for x in net if x > 0)
+    loss = -sum(x for x in net if x <= 0)
+    streak = cur = 0
+    for x in net:
+        cur = cur + 1 if x <= 0 else 0
+        streak = max(streak, cur)
+    cap0 = float(res.get("initial_capital") or 0)
+    fin = float(res.get("final_balance") or 0)
+    return {"profit_factor": round(win / loss, 2) if loss > 0 else None,
+            "max_loss_streak": streak, "total_pnl": round(fin - cap0, 2)}
+
+
 def meta_of(job_id: str, params: dict, res: dict) -> dict:
     cap0 = float(res.get("initial_capital") or 0)
     fin = float(res.get("final_balance") or 0)
@@ -53,6 +68,7 @@ def meta_of(job_id: str, params: dict, res: dict) -> dict:
         "winrate": res.get("winrate"), "overrides": res.get("overrides") or {},
         "leverage": params.get("leverage"), "wallet_pct": params.get("wallet_pct"),
         "elapsed_sec": res.get("elapsed_sec"),
+        **trade_metrics(res),
     }
 
 
@@ -80,8 +96,26 @@ def load(job_id: str):
         return None
 
 
+def _backfill(idx: list) -> bool:
+    """Kết quả lưu trước 2026-11-22 chưa có profit factor / chuỗi thua trong index: đọc file đầy đủ một lần rồi ghi bổ sung."""
+    changed = False
+    for m in idx:
+        if "max_loss_streak" in m:
+            continue
+        res = load(str(m.get("id")))
+        m.update(trade_metrics(res) if res else {"profit_factor": None, "max_loss_streak": None, "total_pnl": None})
+        changed = True
+    return changed
+
+
 def listing(limit: int = 100) -> list:
-    return _read_index()[: max(1, min(int(limit), MAX_KEEP))]
+    idx = _read_index()
+    if any("max_loss_streak" not in m for m in idx):
+        with _lock:
+            idx = _read_index()
+            if _backfill(idx):
+                _atomic_write(INDEX, json.dumps(idx, ensure_ascii=False, default=str))
+    return idx[: max(1, min(int(limit), MAX_KEEP))]
 
 
 def delete(job_id: str) -> bool:
