@@ -52,7 +52,15 @@
       <div class="field hist-sort-m"><span>&nbsp;</span><button class="btn" id="hDir" type="button">↓ Giảm dần</button></div>
       <div class="field"><span>&nbsp;</span><button class="btn" id="hClear" type="button">Xoá lọc</button></div>
     </div></details>
-    <p class="muted" style="margin:6px 0 0">Bấm vào tiêu đề cột để sắp xếp (bấm lần nữa để đảo chiều). Bấm một dòng để xem chi tiết.</p>
+    <p class="muted" style="margin:6px 0 0">Bấm vào tiêu đề cột để sắp xếp (bấm lần nữa để đảo chiều). Bấm một dòng để xem chi tiết.
+      Tick ô bên trái để chọn nhiều kết quả rồi tải về một thư mục Excel (ZIP).</p>
+    {# [2026-11-22] Chọn nhiều kết quả → tải ZIP (1 thư mục gồm các file Excel + TONG_HOP.xlsx) #}
+    <div class="sel-bar" id="selBar">
+      <span id="selInfo">Chưa chọn kết quả nào</span>
+      <button class="btn ok sm" id="selZip" type="button" disabled>Tải thư mục Excel (ZIP)</button>
+      <button class="btn sm" id="selShown" type="button">Chọn tất cả đang hiện</button>
+      <button class="btn sm" id="selNone" type="button" disabled>Bỏ chọn</button>
+    </div>
     <div class="tbl-wrap" style="margin-top:8px"><table class="tbl" id="histTbl"></table></div>
     <p class="muted" id="histEmpty" style="display:none">Chưa có kết quả nào. Chạy một backtest ở trên.</p>
   </section>

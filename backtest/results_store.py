@@ -118,6 +118,11 @@ def listing(limit: int = 100) -> list:
     return idx[: max(1, min(int(limit), MAX_KEEP))]
 
 
+def meta(job_id: str) -> dict:
+    """Dòng index của một kết quả đã lưu (lúc chạy, đòn bẩy...) — {} nếu không có."""
+    return next((m for m in _read_index() if m.get("id") == job_id), {})
+
+
 def delete(job_id: str) -> bool:
     if not _ID_RE.match(str(job_id)):
         return False

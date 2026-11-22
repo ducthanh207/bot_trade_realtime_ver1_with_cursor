@@ -164,13 +164,17 @@
     $("histCount").textContent = items.length ? rows.length + " / " + items.length + " kết quả" : "";
     $("histEmpty").textContent = items.length ? "Không có kết quả nào khớp bộ lọc." : "Chưa có kết quả nào. Chạy một backtest ở trên.";
     $("histEmpty").style.display = rows.length ? "none" : "";
-    $("histTbl").innerHTML = rows.length ? "<tr>" + COLS.map(function (c) {
+    shown = rows.map(function (x) { return x.id; });
+    var allOn = shown.length && shown.every(function (id) { return picked[id]; });
+    $("histTbl").innerHTML = rows.length ? "<tr><th class='sel'><label title='Chọn / bỏ chọn tất cả đang hiện'><input type='checkbox' id='selAll'" +
+      (allOn ? " checked" : "") + "></label></th>" + COLS.map(function (c) {
         var on = c[0] === view.sort;
         return "<th class='sortable" + (on ? " sorted" : "") + "' data-k='" + c[0] + "' title='Bấm để sắp xếp'>" + esc(c[1]) +
           "<span class='arr'>" + (on ? (view.dir < 0 ? "▼" : "▲") : "↕") + "</span></th>";
       }).join("") + "</tr>" + rows.map(function (x) {
         var r = Number(x.return_pct || 0), pnl = nOrNull(x.total_pnl), pf = nOrNull(x.profit_factor);
-        return "<tr class='click' data-id='" + esc(x.id) + "'><td>" + runAt(x.saved_at) +
+        return "<tr class='click" + (picked[x.id] ? " picked" : "") + "' data-id='" + esc(x.id) + "'><td class='sel'><label><input type='checkbox' class='pick'" +
+          (picked[x.id] ? " checked" : "") + "></label></td><td>" + runAt(x.saved_at) +
           "</td><td>" + esc(x.label || label(x.method)) + "</td><td>" + esc(x.symbol) + "</td><td>" + esc(d10(x.start)) + " → " +
           esc(d10(x.end)) + "</td><td class='" + (r >= 0 ? "pos" : "neg") + "'>" + V.money(r) + "%</td><td class='" +
           (pnl === null ? "" : pnl >= 0 ? "pos" : "neg") + "'>" + (pnl === null ? "—" : V.money(pnl)) + "</td><td>" + V.num(x.max_drawdown_pct, 1) +
@@ -178,7 +182,34 @@
           (pf !== null ? pf.toFixed(2) : (Number(x.return_pct) > 0 && x.max_loss_streak === 0 ? "∞" : "—")) + "</td><td>" +
           (x.max_loss_streak == null ? "—" : esc(x.max_loss_streak)) + "</td><td class='muted'>" + esc(ovText(x)) + "</td></tr>";
       }).join("") : "";
+    drawSel();
   }
+  // [2026-11-22] chọn nhiều kết quả → tải ZIP
+  var picked = {}, shown = [];
+  function pickedIds() { return items.filter(function (x) { return picked[x.id]; }).map(function (x) { return x.id; }); }
+  function drawSel() {
+    var ids = pickedIds(), n = ids.length, MAX = 50;
+    $("selInfo").textContent = n ? "Đã chọn " + n + " kết quả" + (n > MAX ? " (tối đa " + MAX + " mỗi lần tải)" : "") : "Chưa chọn kết quả nào";
+    $("selZip").disabled = !n || n > MAX;
+    $("selNone").disabled = !n;
+    $("selBar").classList.toggle("on", n > 0);
+  }
+  $("selZip").addEventListener("click", function () {
+    var ids = pickedIds(); if (!ids.length) return;
+    var btn = this; btn.disabled = true; btn.textContent = "Đang tạo file...";
+    fetch("/api/backtests/zip?ids=" + ids.join(",")).then(function (r) {
+      if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ("Lỗi " + r.status)); });
+      var cd = r.headers.get("Content-Disposition") || "", m = /filename="([^"]+)"/.exec(cd);
+      return r.blob().then(function (b) {
+        var a = document.createElement("a"), u = URL.createObjectURL(b);
+        a.href = u; a.download = m ? m[1] : "backtest.zip"; document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(u); a.remove(); }, 2000);
+      });
+    }).catch(function (e) { alert("Không tải được: " + e.message); })
+      .then(function () { btn.textContent = "Tải thư mục Excel (ZIP)"; drawSel(); });
+  });
+  $("selShown").addEventListener("click", function () { shown.forEach(function (id) { picked[id] = true; }); drawHist(); });
+  $("selNone").addEventListener("click", function () { picked = {}; drawHist(); });
   function setSort(k, dir) { view.sort = k; view.dir = dir; saveView(); drawHist(); }
   FIELDS.forEach(function (k) { $(k).addEventListener(k === "hText" || k === "hMinTr" ? "input" : "change", function () { saveView(); drawHist(); }); });
   $("hSort").addEventListener("change", function () { setSort(this.value, col(this.value)[3]); });
@@ -186,7 +217,19 @@
   $("hClear").addEventListener("click", function () {
     FIELDS.forEach(function (k) { $(k).value = ""; }); saveView(); drawHist();
   });
+  $("histTbl").addEventListener("change", function (e) {
+    var t = e.target;
+    if (t.id === "selAll") { shown.forEach(function (id) { if (t.checked) picked[id] = true; else delete picked[id]; }); drawHist(); return; }
+    if (t.classList.contains("pick")) {
+      var tr = t.closest("tr"), id = tr.dataset.id;
+      if (t.checked) picked[id] = true; else delete picked[id];
+      tr.classList.toggle("picked", t.checked);
+      var all = $("selAll"); if (all) all.checked = shown.every(function (k) { return picked[k]; });
+      drawSel();
+    }
+  });
   $("histTbl").addEventListener("click", function (e) {
+    if (e.target.closest(".sel")) return;  // bấm ô tick không mở chi tiết
     var th = e.target.closest("th.sortable");
     if (th) { var k = th.dataset.k; setSort(k, k === view.sort ? -view.dir : col(k)[3]); return; }
     var tr = e.target.closest("tr.click"); if (tr) openResult(tr.dataset.id);
