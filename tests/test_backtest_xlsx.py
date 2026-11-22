@@ -31,17 +31,24 @@ def test_xlsx_structure():
     data = backtest_result_xlsx(RESULT)
     z = zipfile.ZipFile(io.BytesIO(data))
     names = set(z.namelist())
-    assert {"xl/workbook.xml", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/styles.xml"} <= names
+    assert {"xl/workbook.xml", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet3.xml", "xl/styles.xml",
+            "xl/media/image1.png", "xl/drawings/drawing1.xml", "xl/worksheets/_rels/sheet2.xml.rels"} <= names
     wb = z.read("xl/workbook.xml").decode()
-    assert "Thống kê" in wb and "Lệnh" in wb
-    trades = z.read("xl/worksheets/sheet2.xml").decode()
+    assert "Tổng quan" in wb and "Biểu đồ PnL" in wb and "Lệnh" in wb  # [2026-11-22] 3 sheet
+    assert z.read("xl/media/image1.png")[:8] == b"\x89PNG\r\n\x1a\n"
+    trades = z.read("xl/worksheets/sheet3.xml").decode()
     assert trades.count("<row ") == 3  # tiêu đề + 2 lệnh
     assert "2026-10-02 07:00" in trades and "HARD_STOP" in trades
     try:
         import openpyxl  # có trên máy dev; VPS không cần
     except ImportError:
         return
-    ws = openpyxl.load_workbook(io.BytesIO(data))["Lệnh"]
+    wbk = openpyxl.load_workbook(io.BytesIO(data))
+    assert wbk.sheetnames == ["Tổng quan", "Biểu đồ PnL", "Lệnh"]
+    ov = {r[0]: r[1] for r in wbk["Tổng quan"].iter_rows(values_only=True) if r and r[0]}
+    assert ov["Cặp"] == "BTCUSDT" and ov["Lời/lỗ (USDT)"] == 9.4 and ov["HARD_STOP"] == 1
+    assert len(wbk["Biểu đồ PnL"]._images) == 1
+    ws = wbk["Lệnh"]
     assert [c.value for c in ws[1]] == [c for c, _ in TRADE_COLUMNS]
     assert ws.cell(row=3, column=11).value == -12.0  # profit ròng = profit − phí vào
 
@@ -61,8 +68,39 @@ def test_xlsx_endpoint():
     c = app.test_client()
     r = c.get("/api/backtest/job/t_xlsx/xlsx")
     assert r.status_code == 200 and r.data[:2] == b"PK"
-    assert "backtest_PP4_BTCUSDT" in r.headers["Content-Disposition"]
+    assert "PP4_BTCUSDT_2026-10-01_den_2026-11-07_chay-" in r.headers["Content-Disposition"]
     assert c.get("/api/backtest/job/khong_co/xlsx").status_code == 404
+
+
+def test_filename_rule():
+    from backtest.xlsx_export import backtest_filename
+
+    meta = {"saved_at": 1795334340}  # 2026-11-22 07:59 UTC = 14:59 giờ VN
+    assert backtest_filename(RESULT, meta, "ab12cd3456") == "PP4_BTCUSDT_2026-10-01_den_2026-11-07_chay-20261122-1459_ab12cd.xlsx"
+    r = dict(RESULT, label="PP6.1 / CVD", overrides={"M6_EXIT_MODE": "close"})
+    assert backtest_filename(r, {}, None) == "PP6.1-CVD_BTCUSDT_2026-10-01_den_2026-11-07_thamso.xlsx"
+
+
+def test_zip_endpoint(tmp_path, monkeypatch):
+    """[2026-11-22] Tải nhiều kết quả: ZIP = 1 thư mục gồm các file Excel + TONG_HOP.xlsx."""
+    from backtest import results_store as rs
+    from web.app import app
+
+    monkeypatch.setattr(rs, "DIR", tmp_path)
+    monkeypatch.setattr(rs, "INDEX", tmp_path / "index.json")
+    rs.save("aaaaaaaa11", {"method": "4"}, dict(RESULT))
+    rs.save("bbbbbbbb22", {"method": "4"}, dict(RESULT, symbol="ETHUSDT"))
+    c = app.test_client()
+    r = c.get("/api/backtests/zip?ids=aaaaaaaa11,bbbbbbbb22,cccccccc33")
+    assert r.status_code == 200 and r.mimetype == "application/zip"
+    z = zipfile.ZipFile(io.BytesIO(r.data))
+    names = z.namelist()
+    folder = names[0].split("/")[0]
+    assert folder.startswith("backtest_") and all(n.startswith(folder + "/") for n in names)
+    assert len(names) == 3 and any("ETHUSDT" in n for n in names) and names[-1].endswith("/TONG_HOP.xlsx")
+    assert zipfile.ZipFile(io.BytesIO(z.read(names[0]))).read("xl/media/image1.png")[:4] == b"\x89PNG"
+    assert c.get("/api/backtests/zip?ids=").status_code == 400
+    assert c.get("/api/backtests/zip?ids=cccccccc33").status_code == 404
 
 
 def test_web_jobs_run_in_parallel(monkeypatch):

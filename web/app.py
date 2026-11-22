@@ -1256,17 +1256,16 @@ def api_backtest_job(job_id):
 @app.route("/api/backtest/job/<job_id>/xlsx")
 def api_backtest_job_xlsx(job_id):
     """[2026-11-07] Tải file Excel (thống kê + chi tiết lệnh) của một job backtest đã xong."""
-    from backtest import web_backtest
-    from backtest.xlsx_export import backtest_result_xlsx
+    from backtest import results_store, web_backtest
+    from backtest.xlsx_export import backtest_filename, backtest_result_xlsx
 
     d = web_backtest.status(job_id)
     if d.get("state") != "done" or d.get("error"):
         return jsonify({"error": d.get("error") or "Backtest chưa xong"}), 404
-    data = backtest_result_xlsx(d)
-    day = lambda v: str(v or "")[:10]
-    import re as _re
-    label = _re.sub(r"[^A-Za-z0-9_.-]", "_", str(d.get("label") or f"PP{d.get('method')}"))
-    name = f"backtest_{label}_{d.get('symbol')}_{day(d.get('start'))}_{day(d.get('end'))}.xlsx"
+    # [2026-11-22] cùng quy tắc tên + sheet Tổng quan / Biểu đồ PnL như khi tải ZIP
+    meta = results_store.meta(job_id) or {"saved_at": time.time()}
+    data = backtest_result_xlsx(d, meta, job_id)
+    name = backtest_filename(d, meta, job_id)
     resp = app.response_class(data, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     resp.headers["Content-Disposition"] = f'attachment; filename="{name}"'
     return resp

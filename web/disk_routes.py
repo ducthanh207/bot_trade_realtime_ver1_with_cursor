@@ -20,6 +20,7 @@ from flask import Blueprint, Response, jsonify, render_template, request, sessio
 bp = Blueprint("disks", __name__)
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}USDT$")
 MAX_SYMBOLS = 10
+MAX_ZIP = 50  # [2026-11-22] số kết quả tối đa mỗi lần tải ZIP
 
 
 def _admin():
@@ -321,3 +322,44 @@ def api_backtest_delete(job_id):
         return bad
     from backtest import results_store
     return jsonify({"ok": results_store.delete(job_id)})
+
+
+@bp.route("/api/backtests/zip")
+def api_backtests_zip():
+    """[2026-11-22] Tải nhiều kết quả đã chọn thành 1 file ZIP = 1 thư mục gồm các file Excel (cùng quy tắc tên như
+    tải lẻ: Tổng quan, Biểu đồ PnL, Lệnh) + TONG_HOP.xlsx so sánh nhanh. ?ids=a,b,c (tối đa MAX_ZIP)."""
+    import io
+    import time
+    import zipfile
+
+    from backtest import results_store, web_backtest
+    from backtest.xlsx_export import _vn_time, backtest_filename, backtest_result_xlsx, summary_xlsx
+
+    ids = [i for i in re.split(r"[\s,]+", request.args.get("ids", "")) if re.match(r"^[a-f0-9]{8,32}$", i)]
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return _err("Chưa chọn kết quả nào", 400)
+    if len(ids) > MAX_ZIP:
+        return _err(f"Chọn tối đa {MAX_ZIP} kết quả mỗi lần tải", 400)
+    stamp = _vn_time(time.time()).replace("-", "").replace(" ", "-").replace(":", "")
+    folder = f"backtest_{stamp}_{len(ids)}-ket-qua"
+    buf, entries, used = io.BytesIO(), [], set()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for jid in ids:
+            d = web_backtest.status(jid)
+            if d.get("state") != "done" or d.get("error"):
+                continue
+            meta = results_store.meta(jid)
+            name = backtest_filename(d, meta, jid)
+            base, k = name[:-5], 2
+            while name in used:
+                name, k = f"{base}_{k}.xlsx", k + 1
+            used.add(name)
+            z.writestr(f"{folder}/{name}", backtest_result_xlsx(d, meta, jid))
+            entries.append((name, d, meta))
+        if not entries:
+            return _err("Không tìm thấy kết quả nào đã chọn", 404)
+        z.writestr(f"{folder}/TONG_HOP.xlsx", summary_xlsx(entries))
+    resp = Response(buf.getvalue(), mimetype="application/zip")
+    resp.headers["Content-Disposition"] = f'attachment; filename="{folder}.zip"'
+    return resp
