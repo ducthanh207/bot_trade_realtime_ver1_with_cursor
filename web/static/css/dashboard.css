@@ -676,6 +676,24 @@ body {
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font-size: 12px; padding: 5px 10px; border-radius: 999px; border: 1px solid #363a45; background: #131722; cursor: pointer; color: #b2b5be; }
 .chip.on { background: #1d2b4f; border-color: #2962ff; color: #e0e3eb; }
+/* [2026-11-22] Lịch sử backtest: bộ lọc + sắp xếp cột */
+.hist-filter { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 10px; align-items: end; margin-top: 10px; }
+.hist-filter .field > span { font-size: 11px; }
+.hist-filter select, .hist-filter input { width: 100%; box-sizing: border-box; }
+.hist-filter .btn { width: 100%; }
+.hist-sort-m { display: none; }
+.hist-box { margin-top: 8px; }
+.hist-box > summary { cursor: pointer; padding: 4px 0; }
+#histActive { color: #8fb0ff; }
+.tbl th.sortable { cursor: pointer; user-select: none; }
+.tbl th.sortable:hover { color: #e0e3eb; }
+.tbl th.sorted { color: #8fb0ff; }
+.tbl th .arr { font-size: 10px; margin-left: 3px; opacity: .45; }
+.tbl th.sorted .arr { opacity: 1; }
+@media (max-width: 768px) {
+  .hist-filter { grid-template-columns: 1fr 1fr; }
+  .hist-sort-m { display: flex; }
+}
 @media (max-width: 768px) {
   .pg { padding: 10px 10px 40px; }
   .grid-cards { grid-template-columns: 1fr; }
